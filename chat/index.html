@@ -1,0 +1,412 @@
+<meta charset="utf-8">
+<title>Kindred</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=ZCOOL+XiaoWei&display=swap">
+<style>
+/* Layout: a one-screen phone chat. Top bar with the character, scrolling transcript, composer pinned to the bottom. */
+:root {
+  --bg: #EDEFF3;
+  --surface: #FFFFFF;
+  --fg: #1B1F2A;
+  --muted: #646B7B;
+  --line: #D5D9E2;
+  --accent: #D27A22;
+  --accent-ink: #FFFFFF;
+  --mine: #D27A22;
+  --mine-ink: #FFFFFF;
+  --danger: #B23A2E;
+  --font-display: "ZCOOL XiaoWei", "Songti SC", "Noto Serif SC", serif;
+  --font-body: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12141A; --surface: #1D2029; --fg: #E7E9EF; --muted: #969DAD; --line: #2D313D;
+    --accent: #E9993E; --accent-ink: #1A1206; --mine: #B9661C; --mine-ink: #FFF6EC; --danger: #E5786A; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12141A; --surface: #1D2029; --fg: #E7E9EF; --muted: #969DAD; --line: #2D313D;
+  --accent: #E9993E; --accent-ink: #1A1206; --mine: #B9661C; --mine-ink: #FFF6EC; --danger: #E5786A; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; }
+button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.danger { color: var(--danger); border-color: color-mix(in oklab, var(--danger) 45%, transparent); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+.app { height: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; }
+.pad { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+.topbar { display: flex; align-items: center; gap: 12px; padding-block: 10px; border-bottom: 1px solid var(--line); background: var(--bg); }
+.who { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; border: 0; padding: 4px 6px 4px 0; border-radius: 12px; text-align: left; }
+.avatar { flex: none; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-size: 22px;
+  background: color-mix(in oklab, var(--accent) 18%, var(--surface)); border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent); }
+.who .name, .who .sub { display: block; }
+.who .name { font-family: var(--font-display); font-size: 20px; line-height: 1.2; }
+.who .sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.who .meta { min-width: 0; }
+.icon-btn { width: 38px; height: 38px; padding: 0; display: grid; place-items: center; font-size: 18px; }
+
+.log { flex: 1; overflow-y: auto; padding-block: 18px; display: flex; flex-direction: column; gap: 12px; overscroll-behavior: contain; }
+.msg { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+.msg .avatar { width: 30px; height: 30px; font-size: 16px; }
+.bubble { max-width: min(80%, 520px); padding: 9px 13px; border-radius: 18px; white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.bot .bubble { background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 6px; }
+.me { justify-content: flex-end; }
+.me .bubble { background: var(--mine); color: var(--mine-ink); border-bottom-right-radius: 6px; }
+.bubble.thinking { color: var(--muted); }
+.bubble.thinking::after { content: "…"; animation: blink 1.2s steps(3) infinite; }
+@keyframes blink { 50% { opacity: .2; } }
+.note { align-self: center; font-size: 12px; color: var(--muted); text-align: center; max-width: 90%; }
+.note button { font-size: 12px; padding: 3px 10px; margin-left: 6px; }
+
+.composer { display: flex; gap: 8px; align-items: flex-end; padding-block: 10px; border-top: 1px solid var(--line); background: var(--bg); }
+.composer textarea { flex: 1; min-width: 0; resize: none; font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 20px; padding: 9px 14px; max-height: 140px; line-height: 1.45; }
+.composer button { height: 40px; padding: 0 18px; }
+
+.sheet { position: fixed; inset: 0; z-index: 20; background: color-mix(in oklab, var(--bg) 55%, transparent); backdrop-filter: blur(6px);
+  display: flex; align-items: flex-end; justify-content: center; }
+.panel { width: min(560px, 100%); max-height: 88%; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-bottom: 0;
+  border-radius: 20px 20px 0 0; padding-top: 18px; padding-bottom: max(18px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(18px, env(safe-area-inset-left, 0px)); padding-right: max(18px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 14px; }
+.panel h2 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 22px; }
+.panel h3 { margin: 4px 0 0; font-size: 12px; color: var(--muted); letter-spacing: .08em; font-weight: 500; }
+.list { display: flex; flex-direction: column; gap: 6px; }
+.item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 14px; border: 1px solid var(--line); text-align: left; width: 100%; }
+.item[aria-current="true"] { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 10%, transparent); }
+.item .meta { flex: 1; min-width: 0; }
+.item b { display: block; font-weight: 600; }
+.item small { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.field input, .field textarea, .field select { font: inherit; font-size: 15px; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; width: 100%; }
+.field textarea { resize: vertical; min-height: 84px; }
+.field .hint { font-size: 12px; }
+.two { display: grid; grid-template-columns: 88px 1fr; gap: 10px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.actions .spacer { flex: 1; }
+.status { font-size: 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .bubble.thinking::after { animation: none; } }
+</style>
+
+<div class="app">
+  <div class="topbar pad">
+    <button class="who" id="whoBtn" type="button" aria-label="切换或编辑角色">
+      <span class="avatar" id="topAvatar">🍯</span>
+      <span class="meta"><span class="name" id="topName">Amber</span><span class="sub" id="topSub">点这里换角色</span></span>
+    </button>
+    <button class="icon-btn" id="editBtn" type="button" aria-label="编辑人设" title="编辑人设">✎</button>
+  </div>
+
+  <div class="log pad" id="log" aria-live="polite"></div>
+
+  <form class="composer pad" id="composer">
+    <textarea id="input" rows="1" placeholder="说点什么…" aria-label="消息"></textarea>
+    <button class="primary" type="submit" id="sendBtn" disabled>发送</button>
+    <button type="button" id="stopBtn" hidden>停止</button>
+  </form>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="panel" id="panel" role="dialog" aria-modal="true"></div>
+</div>
+
+<script>
+(function () {
+  const PRESETS = [
+    { tpl: "amber", name: "Amber", avatar: "🍯", tier: "quick",
+      persona: "你是 Amber，二十多岁，开一家小咖啡馆。性格温暖、好奇心重，有点话痨，喜欢收集各种冷知识。你是用户的老朋友，会记得对方说过的事，偶尔吐槽，但总是站在对方这边。",
+      style: "口语化，像微信聊天。一次只说一两句，偶尔用语气词（哈、诶、嘛），不用列表。",
+      greeting: "诶，你来啦！今天店里没什么人，正好陪你聊聊。最近怎么样？" },
+    { tpl: "mentor", name: "老周", avatar: "🧭", tier: "default",
+      persona: "你是老周，四十五岁，在互联网公司做了二十年技术和管理，现在是职业导师。说话直接，不灌鸡汤，喜欢追问细节，会给具体可执行的建议，也会指出对方逻辑里的漏洞。",
+      style: "简洁有力，先问清楚情况再给建议。建议最多三条，每条都要能落地。",
+      greeting: "说吧，最近卡在哪儿了？讲具体点。" },
+    { tpl: "cat", name: "年糕", avatar: "🐱", tier: "quick",
+      persona: "你是一只叫年糕的橘猫，住在用户家里。傲娇、贪吃、爱睡觉，嘴上嫌弃主人，其实很黏人。你用猫的视角看世界，人类的烦恼在你看来都可以用一顿饭或一个午觉解决。",
+      style: "句子很短，偶尔在句尾加“喵”，经常把话题绕回吃的和睡觉。",
+      greeting: "喵。你终于回来了。先说好，我不是在等你，我是在等罐头。" },
+  ];
+  const BLANK = { tpl: "blank", name: "", avatar: "🙂", tier: "quick", persona: "", style: "", greeting: "" };
+  const KEEP_TURNS = 40;      // turns sent as context each call
+  const STORE_TURNS = 300;    // turns kept per character
+  const LOCAL_KEY = "amber-chat-v1", CURRENT_KEY = "amber-chat-current";
+
+  const $ = id => document.getElementById(id);
+  const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+
+  let bots = [];            // saved characters
+  let chats = {};           // botId -> [{role, content, at}]
+  let currentId = null;
+  let draftBot = null;      // unsaved default character shown before anything is saved
+  let store = null, mode = "pending", sample = null;
+  let busy = false, ctl = null;
+
+  // ---------- storage ----------
+  const localLoad = () => { try { return JSON.parse(localStorage.getItem(LOCAL_KEY) || "{}"); } catch { return {}; } };
+  const localWrite = () => { try { localStorage.setItem(LOCAL_KEY, JSON.stringify({ bots, chats })); } catch {} };
+  const remember = id => { try { localStorage.setItem(CURRENT_KEY, id); } catch {} };
+  const recall = () => { try { return localStorage.getItem(CURRENT_KEY); } catch { return null; } };
+
+  function useLocal() {
+    const d = localLoad(); bots = d.bots || []; chats = d.chats || {}; mode = "local";
+    store = {
+      async saveBot(b) { bots = bots.filter(x => x.id !== b.id).concat(b); localWrite(); },
+      async deleteBot(id) { bots = bots.filter(x => x.id !== id); delete chats[id]; localWrite(); },
+      async saveChat(id, msgs) { chats[id] = msgs; localWrite(); },
+    };
+    afterLoad();
+  }
+
+  async function init() {
+    renderAll();
+    if (!window.claude || typeof window.claude.use !== "function") { useLocal(); return; }
+    const [db, user, s] = await Promise.all(["db", "user", "sample"].map(n => window.claude.use(n).catch(() => null)));
+    sample = s;
+    const uid = user ? await user.id().catch(() => null) : null;
+    if (!db || !uid) { useLocal(); return; }
+    const col = db.collection("data/users/" + uid);
+    store = {
+      async saveBot(b) { bots = bots.filter(x => x.id !== b.id).concat(b); const { id, ...rest } = b; await col.doc("bot_" + id).set({ kind: "bot", ...rest }); },
+      async deleteBot(id) { bots = bots.filter(x => x.id !== id); delete chats[id]; await col.doc("bot_" + id).delete(); await col.doc("chat_" + id).delete(); },
+      async saveChat(id, msgs) { chats[id] = msgs; await col.doc("chat_" + id).set({ kind: "chat", messages: msgs }); },
+    };
+    mode = "cloud";
+    let first = true;
+    col.onSnapshot(snap => {
+      const nb = [], nc = {};
+      snap.docs.forEach(d => { if (!d.exists) return; const v = d.data();
+        if (v.kind === "bot") nb.push({ ...v, id: d.id.slice(4) });
+        else if (v.kind === "chat") nc[d.id.slice(5)] = v.messages || []; });
+      bots = nb;
+      if (!busy) chats = nc; else Object.keys(nc).forEach(k => { if (k !== currentId) chats[k] = nc[k]; });
+      if (first) { first = false; afterLoad(); } else if (!busy) renderAll();
+    }, () => {});
+  }
+
+  function afterLoad() {
+    const saved = recall();
+    currentId = bots.some(b => b.id === saved) ? saved : (bots[0] && bots[0].id) || null;
+    if (!currentId) { draftBot = { ...PRESETS[0], id: newId(), createdAt: new Date().toISOString() }; currentId = draftBot.id; }
+    renderAll();
+  }
+
+  const current = () => bots.find(b => b.id === currentId) || (draftBot && draftBot.id === currentId ? draftBot : null);
+  const history = () => chats[currentId] || [];
+
+  // ---------- rendering ----------
+  function renderTop() {
+    const b = current();
+    $("topAvatar").textContent = b ? b.avatar || "🙂" : "…";
+    $("topName").textContent = b ? b.name || "未命名" : "加载中";
+    $("topSub").textContent = mode === "pending" ? "正在连接…" : (bots.length > 1 ? `共 ${bots.length} 个角色 · 点这里切换` : "点这里换角色或新建角色");
+  }
+
+  function bubbleRow(role, text, avatar) {
+    const row = el("div", "msg " + (role === "user" ? "me" : "bot"));
+    if (role !== "user") row.append(el("span", "avatar", avatar || "🙂"));
+    const b = el("div", "bubble", text); row.append(b);
+    return { row, b };
+  }
+
+  function renderLog() {
+    const log = $("log"); log.replaceChildren();
+    const b = current();
+    if (!b) { log.append(el("div", "note", "正在打开…")); return; }
+    if (b.greeting) log.append(bubbleRow("assistant", b.greeting, b.avatar).row);
+    history().forEach(m => log.append(bubbleRow(m.role, m.content, b.avatar).row));
+    if (mode !== "pending" && !sample) {
+      log.append(el("div", "note", window.claude ? "这个页面还没有获得调用 Claude 的权限，所以暂时不能回复。刷新页面后在弹出的提示里允许即可。" : "要在 Claude 里打开这个页面才能对话。现在只能看看界面。"));
+    }
+    scrollDown();
+  }
+  function scrollDown() { const log = $("log"); log.scrollTop = log.scrollHeight; }
+  function renderAll() { renderTop(); renderLog(); updateSend(); }
+  function updateSend() { $("sendBtn").disabled = busy || !$("input").value.trim() || !current() || mode === "pending"; }
+
+  // ---------- chat ----------
+  function rulesFor(b) {
+    return [
+      "接下来请你进入角色扮演，和我聊天。下面是你的角色设定。",
+      `【名字】${b.name || "未命名"}`,
+      b.persona ? `【人设】${b.persona}` : "",
+      b.style ? `【说话风格】${b.style}` : "",
+      "【规则】",
+      "1. 始终以这个角色的身份、语气和视角说话，直接说台词，不要加旁白、动作描写或引号。",
+      "2. 像真人发消息一样自然，默认简短；我要求详细时再展开。",
+      "3. 用中文回复，除非我用别的语言。",
+      "4. 记住我们聊过的内容，前后保持一致。",
+      "5. 如果我认真地问你是不是 AI，要诚实承认，然后可以继续用角色的口吻聊。",
+      "6. 不提供危险或违法的帮助；遇到这种请求，用角色的方式拒绝。",
+      "设定到此结束。下面开始对话。",
+    ].filter(Boolean).join("\n");
+  }
+
+  const ERR = {
+    rate_limited: "说太快了，或者今天的额度用完了，过一会儿再试。",
+    session_expired: "登录过期了，重新登录 Claude 后刷新页面。",
+    refused: "这条消息没法回复，换个说法试试。",
+    empty_completion: "对方没说出话来，换个说法试试。",
+    prompt_too_large: "聊天记录太长了，可以在人设里清空对话后再继续。",
+    not_granted: "这个页面没有获得调用 Claude 的权限。",
+    sampling_disabled: "你的账号暂时不能使用这个功能。",
+  };
+
+  async function send(text) {
+    const b = current(); if (!b || !sample) { renderLog(); return; }
+    busy = true; updateSend(); $("stopBtn").hidden = false; $("sendBtn").hidden = true;
+    if (draftBot && draftBot.id === b.id) { draftBot = null; store.saveBot(b).catch(() => {}); }
+    const msgs = history().concat({ role: "user", content: text, at: new Date().toISOString() });
+    chats[b.id] = msgs;
+    $("log").append(bubbleRow("user", text).row);
+    const { row, b: bubble } = bubbleRow("assistant", "", b.avatar); bubble.classList.add("thinking");
+    $("log").append(row); scrollDown();
+
+    const turns = [{ role: "user", content: rulesFor(b) }];
+    if (b.greeting) turns.push({ role: "assistant", content: b.greeting });
+    msgs.slice(-KEEP_TURNS).forEach(m => turns.push({ role: m.role, content: m.content }));
+    if (turns[1] && turns[1].role === "user") turns.splice(1, 0, { role: "assistant", content: "好的，我准备好了。" });
+
+    ctl = new AbortController();
+    let reply = "", note = null;
+    try {
+      const res = await sample(turns, {
+        cache: false, signal: ctl.signal, modelTier: b.tier === "default" ? "default" : "quick",
+        onText: ({ text }) => { bubble.classList.remove("thinking"); bubble.textContent = text; scrollDown(); },
+      });
+      reply = res.text;
+    } catch (e) {
+      reply = (e && e.text) || "";
+      if (e && e.code !== "cancelled") note = ERR[e.code] || "网络好像断了一下，再发一次试试。";
+    }
+    bubble.classList.remove("thinking");
+    if (reply) { bubble.textContent = reply; msgs.push({ role: "assistant", content: reply, at: new Date().toISOString() }); }
+    else row.remove();
+    if (note) { const n = el("div", "note", note); $("log").append(n); }
+    chats[b.id] = msgs.slice(-STORE_TURNS);
+    busy = false; ctl = null; $("stopBtn").hidden = true; $("sendBtn").hidden = false; updateSend(); scrollDown();
+    try { await store.saveChat(b.id, chats[b.id]); } catch { $("log").append(el("div", "note", "这段对话没能保存，刷新后可能会丢。")); scrollDown(); }
+  }
+
+  const input = $("input");
+  const grow = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; };
+  input.addEventListener("input", () => { grow(); updateSend(); });
+  input.addEventListener("keydown", ev => {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing && window.matchMedia("(hover: hover)").matches) { ev.preventDefault(); $("composer").requestSubmit(); }
+  });
+  $("composer").addEventListener("submit", ev => {
+    ev.preventDefault(); const t = input.value.trim(); if (!t || busy) return;
+    input.value = ""; grow(); send(t);
+  });
+  $("stopBtn").addEventListener("click", () => ctl && ctl.abort());
+
+  // ---------- sheets ----------
+  const sheet = $("sheet"), panel = $("panel");
+  function openSheet(build) { panel.replaceChildren(); build(panel); sheet.hidden = false; const f = panel.querySelector("button, input, textarea"); if (f) f.focus(); }
+  function closeSheet() { sheet.hidden = true; }
+  sheet.addEventListener("click", ev => { if (ev.target === sheet) closeSheet(); });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !sheet.hidden) closeSheet(); });
+
+  function switchTo(id) { currentId = id; remember(id); closeSheet(); renderAll(); }
+
+  function openPicker() {
+    openSheet(p => {
+      p.append(el("h2", null, "角色"));
+      const list = el("div", "list");
+      const shown = bots.slice();
+      if (draftBot) shown.unshift(draftBot);
+      shown.forEach(b => {
+        const it = el("button", "item"); it.type = "button"; it.setAttribute("aria-current", b.id === currentId);
+        const meta = el("span", "meta"); meta.append(el("b", null, b.name || "未命名"), el("small", null, b.persona || "还没写人设"));
+        it.append(el("span", "avatar", b.avatar || "🙂"), meta);
+        it.addEventListener("click", () => switchTo(b.id));
+        list.append(it);
+      });
+      p.append(list, el("h3", null, "新建角色：从模板开始"));
+      const tpl = el("div", "list");
+      PRESETS.concat(BLANK).forEach(t => {
+        const it = el("button", "item"); it.type = "button";
+        const meta = el("span", "meta"); meta.append(el("b", null, t.name || "空白角色"), el("small", null, t.persona || "从零开始写你自己的角色"));
+        it.append(el("span", "avatar", t.avatar), meta);
+        it.addEventListener("click", () => openEditor({ ...t, id: null }));
+        tpl.append(it);
+      });
+      p.append(tpl);
+      const s = el("div", "status", mode === "cloud" ? "角色和聊天记录保存在你的 Claude 账号里，只有你能看到。" : mode === "local" ? "角色和聊天记录保存在这台设备的浏览器里。" : "");
+      p.append(s);
+    });
+  }
+
+  function field(label, node, hint) { const f = el("label", "field"); f.append(label); f.append(node); if (hint) f.append(el("span", "hint", hint)); return f; }
+
+  function openEditor(src) {
+    const isNew = !src.id;
+    openSheet(p => {
+      p.append(el("h2", null, isNew ? "新建角色" : "编辑人设"));
+      const form = document.createElement("form"); form.style.cssText = "display:flex;flex-direction:column;gap:14px";
+      const avatar = document.createElement("input"); avatar.id = "fAvatar"; avatar.value = src.avatar || ""; avatar.maxLength = 4;
+      const name = document.createElement("input"); name.id = "fName"; name.value = src.name || ""; name.maxLength = 20; name.required = true;
+      const two = el("div", "two"); two.append(field("头像", avatar), field("名字", name));
+      const persona = document.createElement("textarea"); persona.id = "fPersona"; persona.value = src.persona || ""; persona.maxLength = 2000;
+      persona.placeholder = "TA 是谁？几岁、做什么、什么性格、和你是什么关系";
+      const style = document.createElement("textarea"); style.id = "fStyle"; style.value = src.style || ""; style.maxLength = 600; style.style.minHeight = "60px";
+      style.placeholder = "比如：说话简短，爱用比喻，偶尔毒舌";
+      const greeting = document.createElement("input"); greeting.id = "fGreeting"; greeting.value = src.greeting || ""; greeting.maxLength = 200;
+      const tier = document.createElement("select"); tier.id = "fTier";
+      [["quick", "快速（一两秒回复，适合闲聊）"], ["default", "用心（想得更久，适合聊正事）"]].forEach(([v, t]) => { const o = el("option", null, t); o.value = v; tier.append(o); });
+      tier.value = src.tier || "quick";
+      form.append(two, field("人设", persona, "写得越具体，角色越像。"), field("说话风格", style), field("开场白", greeting, "每次进入对话时 TA 说的第一句话，可以不填。"), field("回复模式", tier));
+
+      const actions = el("div", "actions");
+      if (!isNew) {
+        const clear = el("button", "danger", "清空对话"); clear.type = "button";
+        clear.addEventListener("click", async () => {
+          if (!clear.dataset.armed) { clear.dataset.armed = "1"; clear.textContent = "确定清空？"; return; }
+          chats[src.id] = []; closeSheet(); renderAll();
+          if (!draftBot || draftBot.id !== src.id) await store.saveChat(src.id, []).catch(() => {});
+        });
+        actions.append(clear);
+        if (!draftBot || draftBot.id !== src.id) {
+          const del = el("button", "danger", "删除角色"); del.type = "button";
+          del.addEventListener("click", async () => {
+            if (!del.dataset.armed) { del.dataset.armed = "1"; del.textContent = "确定删除？记录也会删掉"; return; }
+            await store.deleteBot(src.id).catch(() => {});
+            closeSheet(); afterLoad();
+          });
+          actions.append(del);
+        }
+      }
+      actions.append(el("span", "spacer"));
+      const cancel = el("button", null, "取消"); cancel.type = "button"; cancel.addEventListener("click", closeSheet);
+      const ok = el("button", "primary", isNew ? "创建并开始聊" : "保存"); ok.type = "submit";
+      actions.append(cancel, ok);
+      form.append(actions);
+      form.addEventListener("submit", async ev => {
+        ev.preventDefault();
+        if (!name.value.trim()) { name.focus(); return; }
+        const b = { id: src.id || newId(), name: name.value.trim(), avatar: avatar.value.trim() || "🙂", persona: persona.value.trim(),
+          style: style.value.trim(), greeting: greeting.value.trim(), tier: tier.value, createdAt: src.createdAt || new Date().toISOString() };
+        ok.disabled = true;
+        if (draftBot && draftBot.id === b.id) draftBot = null;
+        try { await store.saveBot(b); } catch { ok.disabled = false; ok.textContent = "没能保存，再试一次"; return; }
+        switchTo(b.id);
+      });
+      p.append(form);
+    });
+  }
+
+  $("whoBtn").addEventListener("click", () => { if (mode !== "pending") openPicker(); });
+  $("editBtn").addEventListener("click", () => { const b = current(); if (b && mode !== "pending") openEditor(b); });
+
+  init();
+})();
+</script>
