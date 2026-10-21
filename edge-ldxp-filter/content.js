@@ -793,6 +793,8 @@
   const statusEl = $('[data-role="status"]');
   const summaryEl = $('[data-role="summary"]');
   const pageInfoEl = $('[data-role="pageInfo"]');
+  const prevBtnEl = $('[data-action="prev"]');
+  const nextBtnEl = $('[data-action="next"]');
   const fetchButton = $('[data-action="fetch"]');
   const connectModalEl = $('[data-role="connectModal"]');
   const detailModalEl = $('[data-role="detailModal"]');
@@ -910,6 +912,9 @@
     field("pageJump").max = String(totalPages);
     field("pageJump").value = String(state.currentPage);
     pageInfoEl.textContent = `/ ${totalPages}`;
+    // Greyed out at either end, so a click that cannot turn the page doesn't look ignored.
+    prevBtnEl.disabled = state.currentPage <= 1;
+    nextBtnEl.disabled = state.currentPage >= totalPages;
     renderSortIndicators();
 
     if (!pageItems.length) {
@@ -1601,7 +1606,7 @@
 
   let dragState = null;
   titlebarEl.addEventListener("mousedown", (event) => {
-    if (event.target instanceof Element && event.target.closest("button")) {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button"))) {
       return;
     }
     const rect = root.getBoundingClientRect();
@@ -1618,6 +1623,11 @@
 
   function onDragMove(event) {
     if (!dragState) {
+      return;
+    }
+    // The mouseup was lost (released over an iframe, or after a context menu): stop following the cursor.
+    if (!(event.buttons & 1)) {
+      onDragEnd();
       return;
     }
     if (isMaximized()) {
@@ -1639,6 +1649,9 @@
   let miniDragState = null;
   const miniLauncherEl = $(".ldxp-mini-launcher");
   miniLauncherEl.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
     const rect = root.getBoundingClientRect();
     miniDragState = {
       startX: event.clientX,
@@ -1655,6 +1668,10 @@
 
   function onMiniDragMove(event) {
     if (!miniDragState) {
+      return;
+    }
+    if (!(event.buttons & 1)) {
+      onMiniDragEnd();
       return;
     }
 
@@ -1751,6 +1768,9 @@
 
   let resizeState = null;
   resizeHandleEl.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
     if (isMaximized()) {
       setMaximizedFlag(false);
     }
@@ -1782,6 +1802,10 @@
 
   function onResizeMove(event) {
     if (!resizeState) {
+      return;
+    }
+    if (!(event.buttons & 1)) {
+      onResizeEnd();
       return;
     }
 
