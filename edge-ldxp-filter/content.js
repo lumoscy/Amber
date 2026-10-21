@@ -12,6 +12,8 @@
   const MAX_REQUEST_INTERVAL_SECONDS = 120;
   const MAX_FETCH_RETRIES = 3;
   const MIN_RETRY_DELAY_MS = 2000;
+  const RATE_LIMIT_RETRY_DELAY_MS = 15000;
+  const MAX_AUTO_INTERVAL_MS = 10000;
   const MAX_RETRY_DELAY_MS = 60000;
   const SETTINGS_STORAGE_KEY = "ldxpEdgeFilterSettings";
   const SHOW_PANEL_MESSAGE = "ldxp-edge-filter:show";
@@ -127,8 +129,38 @@
       getProductId(item)
     ].join(" ");
 
-  const getImage = (item) =>
-    item.image || item.cover || item.thumb || "";
+  // searchGoodsList has no image field of its own: the goods picture only appears as an
+  // <img> inside the description HTML, so use the first one, then the merchant's avatar.
+  const DESCRIPTION_IMAGE_PATTERN = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i;
+
+  const toImageUrl = (value) => {
+    const text = asText(value).trim().replace(/&amp;/g, "&");
+    if (!text) {
+      return "";
+    }
+    try {
+      const parsed = new URL(text, location.origin);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+    } catch (_) {
+      return "";
+    }
+  };
+
+  const getDescriptionImage = (item) => {
+    const match = asText(item.description).match(DESCRIPTION_IMAGE_PATTERN);
+    return match ? toImageUrl(match[1]) : "";
+  };
+
+  const getImage = (item) => {
+    if (!item || typeof item !== "object") {
+      return "";
+    }
+    return (
+      toImageUrl(item.image || item.img || item.cover || item.thumb) ||
+      getDescriptionImage(item) ||
+      toImageUrl(item.user?.avatar)
+    );
+  };
 
   const getStock = (item) => asNumber(item.stock_count, null);
 
@@ -521,8 +553,28 @@
     return RETRYABLE_MESSAGE.test(asText(error.message));
   };
 
-  const getRetryDelayMs = (attempt, requestDelayMs) =>
-    Math.min(Math.max(requestDelayMs, MIN_RETRY_DELAY_MS) * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+  // A rate limit needs a much longer pause than a flaky connection before it lifts.
+  const getRetryDelayMs = (attempt, requestDelayMs, rateLimited = false) =>
+    Math.min(
+      Math.max(requestDelayMs, rateLimited ? RATE_LIMIT_RETRY_DELAY_MS : MIN_RETRY_DELAY_MS) * 2 ** (attempt - 1),
+      MAX_RETRY_DELAY_MS
+    );
+
+  // The site's CDN (Alibaba Cloud ESA / Tengine) rejects throttled requests with HTTP 403
+  // plus `X-Tengine-Error: denied by http_ratelimit`, not with 429.
+  const describeHttpError = (status, tengineError = "") => {
+    if (status === 429 || /ratelimit/i.test(asText(tengineError))) {
+      return { message: "触发平台限流（请求太频繁）", retryable: true, rateLimited: true };
+    }
+    if (status === 401 || status === 403) {
+      return { message: `接口拒绝访问（HTTP ${status}）：请确认已登录，并在 www.ldxp.cn 商家后台页面使用`, retryable: false, rateLimited: false };
+    }
+    return { message: `接口请求失败：HTTP ${status}`, retryable: status >= 500, rateLimited: false };
+  };
+
+  // After a rate limit, slow the remaining pages down: double the interval, capped at 10 seconds.
+  const getSlowerIntervalMs = (requestDelayMs) =>
+    Math.min(Math.max(requestDelayMs * 2, MIN_RETRY_DELAY_MS), MAX_AUTO_INTERVAL_MS);
 
   if (globalThis.__LDXP_EDGE_FILTER_TEST_EXPORTS__) {
     globalThis.__LDXP_EDGE_FILTER_TEST_EXPORTS__({
@@ -545,12 +597,15 @@
       calculateConnectPrice,
       getProfit,
       getProfitRate,
+      getImage,
       mergeUniqueItems,
       sortItems,
       filterItems,
       toCsv,
       isRetryableError,
-      getRetryDelayMs
+      getRetryDelayMs,
+      describeHttpError,
+      getSlowerIntervalMs
     });
     return;
   }
@@ -561,43 +616,47 @@
   const defaultAgentKey = readPageAgentKey();
   root.id = ROOT_ID;
   root.innerHTML = `
-    <button class="ldxp-mini-launcher" data-action="expand" title="展开货源增强筛选">
+    <button class="ldxp-mini-launcher" data-action="expand" title="展开货源筛选">
       <img class="ldxp-mini-icon" src="${iconUrl}" alt="">
     </button>
     <div class="ldxp-panel">
       <div class="ldxp-titlebar">
-        <div>
-          <div class="ldxp-title">
-            <span class="ldxp-title-mark">筛</span>
-            <span>货源增强筛选</span>
-            <span class="ldxp-title-badge">轻甜版</span>
-          </div>
-          <div class="ldxp-subtitle">拉取接口数据后在本页筛选，不修改原站数据</div>
+        <div class="ldxp-title">
+          <img class="ldxp-title-icon" src="${iconUrl}" alt="">
+          <span>货源筛选</span>
+          <span class="ldxp-subtitle">拉取后在本页筛选，不修改原站数据</span>
         </div>
         <div class="ldxp-title-actions">
-          <button class="ldxp-icon-btn" data-action="collapse" title="最小化">-</button>
-          <button class="ldxp-icon-btn" data-action="close" title="关闭">x</button>
+          <button class="ldxp-icon-btn" data-action="collapse" title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg>
+          </button>
+          <button class="ldxp-icon-btn" data-action="maximize" data-role="maximizeBtn" title="最大化" aria-label="最大化">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
+          </button>
+          <button class="ldxp-icon-btn" data-action="close" title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
         </div>
       </div>
 
       <div class="ldxp-body">
-        <div class="ldxp-controls">
-          <label>
+        <div class="ldxp-fetchbar">
+          <label class="ldxp-field ldxp-field-source">
             <span>数据来源</span>
             <select data-field="sourceMode">
-              <option value="open" ${defaultSourceMode === "open" ? "selected" : ""}>开放货源搜索</option>
+              <option value="open" ${defaultSourceMode === "open" ? "selected" : ""}>开放货源</option>
               <option value="parent" ${defaultSourceMode === "parent" ? "selected" : ""}>指定货源商</option>
             </select>
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-agent">
             <span>货源对接码</span>
-            <input data-field="agentKey" value="${escapeHtml(defaultAgentKey)}" placeholder="对接码 / agent_key">
+            <input data-field="agentKey" value="${escapeHtml(defaultAgentKey)}" placeholder="对方给你的对接码">
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-keyword">
             <span>关键词</span>
-            <input data-field="keyword" type="search" placeholder="商品名 / 店铺 / 分类">
+            <input data-field="keyword" type="search" placeholder="商品名、店铺或分类，留空拉取全部">
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-type">
             <span>商品类型</span>
             <select data-field="goodsType">
               <option value="">全部</option>
@@ -607,103 +666,116 @@
               <option value="rights">权益</option>
             </select>
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-pages">
             <span>拉取页数</span>
-            <input data-field="pages" type="number" min="1" max="${MAX_FETCH_PAGES}" value="5">
+            <select data-field="pages">
+              <option value="5" selected>5 页</option>
+              <option value="10">10 页</option>
+              <option value="20">20 页</option>
+              <option value="50">50 页</option>
+              <option value="${MAX_FETCH_PAGES}">全部</option>
+            </select>
           </label>
-          <label>
-            <span>请求间隔(秒)</span>
-            <input data-field="requestIntervalSeconds" type="number" min="${MIN_REQUEST_INTERVAL_SECONDS}" max="${MAX_REQUEST_INTERVAL_SECONDS}" step="0.1" value="${DEFAULT_REQUEST_INTERVAL_SECONDS}">
-          </label>
-          <label>
-            <span>成本价最低</span>
-            <input data-field="minCost" type="number" min="0" step="0.01" placeholder="不限">
-          </label>
-          <label>
-            <span>成本价最高</span>
-            <input data-field="maxCost" type="number" min="0" step="0.01" placeholder="不限">
-          </label>
-          <label>
+          <button class="ldxp-primary ldxp-fetch-btn" data-action="fetch">开始拉取</button>
+        </div>
+
+        <div class="ldxp-filterbar">
+          <div class="ldxp-field ldxp-field-range">
+            <span>成本价</span>
+            <div class="ldxp-range">
+              <input data-field="minCost" type="number" min="0" step="0.01" placeholder="最低" aria-label="成本价最低">
+              <i>–</i>
+              <input data-field="maxCost" type="number" min="0" step="0.01" placeholder="最高" aria-label="成本价最高">
+            </div>
+          </div>
+          <label class="ldxp-field">
             <span>库存</span>
             <select data-field="stockMode">
               <option value="all">全部</option>
-              <option value="in">仅有库存</option>
-              <option value="out">仅无库存</option>
+              <option value="in">有库存</option>
+              <option value="out">无库存</option>
             </select>
           </label>
-          <label>
-            <span>状态</span>
+          <label class="ldxp-field">
+            <span>对接状态</span>
+            <select data-field="connected">
+              <option value="all">全部</option>
+              <option value="unlinked">未对接</option>
+              <option value="linked">已对接</option>
+            </select>
+          </label>
+          <label class="ldxp-field ldxp-field-sort">
+            <span>排序</span>
+            <select data-field="sort">
+              <option value="default">默认</option>
+              <option value="costAsc">成本价从低到高</option>
+              <option value="costDesc">成本价从高到低</option>
+              <option value="priceAsc">售价从低到高</option>
+              <option value="priceDesc">售价从高到低</option>
+              <option value="profitDesc">差价从高到低</option>
+              <option value="profitAsc">差价从低到高</option>
+              <option value="profitRateDesc">利润率从高到低</option>
+              <option value="profitRateAsc">利润率从低到高</option>
+              <option value="stockAsc">库存从少到多</option>
+              <option value="stockDesc">库存从多到少</option>
+              <option value="salesDesc">销量从高到低</option>
+              <option value="salesAsc">销量从低到高</option>
+            </select>
+          </label>
+          <div class="ldxp-filter-tools">
+            <button class="ldxp-text-btn" data-action="toggleMore" aria-expanded="false">更多筛选</button>
+            <button class="ldxp-text-btn" data-action="reset">重置</button>
+          </div>
+        </div>
+
+        <div class="ldxp-morebar" data-role="more" hidden>
+          <label class="ldxp-field">
+            <span>上架状态</span>
             <select data-field="statusMode">
               <option value="all">全部</option>
               <option value="normal">正常</option>
               <option value="off">未上架</option>
             </select>
           </label>
-          <label>
-            <span>关联状态</span>
-            <select data-field="connected">
-              <option value="all">全部</option>
-              <option value="linked">已对接</option>
-              <option value="unlinked">未对接</option>
-            </select>
+          <label class="ldxp-field">
+            <span>分类包含</span>
+            <input data-field="categoryKeyword" type="search" placeholder="例如：会员">
           </label>
-          <label>
-            <span>分类关键词</span>
-            <input data-field="categoryKeyword" type="search" placeholder="分类包含">
+          <label class="ldxp-field">
+            <span>商家包含</span>
+            <input data-field="merchantKeyword" type="search" placeholder="商家名称">
           </label>
-          <label>
-            <span>商家名称</span>
-            <input data-field="merchantKeyword" type="search" placeholder="商家包含">
-          </label>
-          <label>
-            <span>排序</span>
-            <select data-field="sort">
-              <option value="default">默认</option>
-              <option value="costAsc">成本价升序</option>
-              <option value="costDesc">成本价降序</option>
-              <option value="priceAsc">售价升序</option>
-              <option value="priceDesc">售价降序</option>
-              <option value="profitDesc">差价降序</option>
-              <option value="profitAsc">差价升序</option>
-              <option value="profitRateDesc">利润率降序</option>
-              <option value="profitRateAsc">利润率升序</option>
-              <option value="stockAsc">库存升序</option>
-              <option value="stockDesc">库存降序</option>
-              <option value="salesDesc">销量降序</option>
-              <option value="salesAsc">销量升序</option>
-            </select>
-          </label>
-          <label>
-            <span>每页显示</span>
-            <select data-field="pageSize">
-              <option value="5">5</option>
-              <option value="10" selected>10</option>
-              <option value="15">15</option>
-              <option value="20">20</option>
-              <option value="25">25</option>
-              <option value="30">30</option>
-            </select>
+          <label class="ldxp-field" title="每页请求之间的等待时间。被平台限流时调到 3 到 5 秒">
+            <span>请求间隔（秒）</span>
+            <input data-field="requestIntervalSeconds" type="number" min="${MIN_REQUEST_INTERVAL_SECONDS}" max="${MAX_REQUEST_INTERVAL_SECONDS}" step="0.1" value="${DEFAULT_REQUEST_INTERVAL_SECONDS}">
           </label>
         </div>
 
-        <div class="ldxp-actions">
-          <button class="ldxp-primary" data-action="fetch">开始拉取</button>
-          <button data-action="apply">筛选当前数据</button>
-          <button data-action="reset">重置</button>
-          <button data-action="export" title="把筛选后的全部结果导出为 CSV，可用 Excel 打开">导出 CSV</button>
-          <span class="ldxp-status" data-role="status">等待操作</span>
-        </div>
+        <div class="ldxp-progress" data-role="progress" hidden><i data-role="progressBar"></i></div>
 
         <div class="ldxp-resultbar">
-          <span data-role="summary">暂无数据</span>
-          <div class="ldxp-pager">
-            <button data-action="first">首页</button>
-            <button data-action="prev">上一页</button>
-            <input data-field="pageJump" type="number" min="1" value="1" title="页码">
-            <button data-action="jump">跳转</button>
-            <span data-role="pageInfo">/ 1</span>
-            <button data-action="next">下一页</button>
-            <button data-action="last">末页</button>
+          <div class="ldxp-result-info">
+            <span class="ldxp-summary" data-role="summary">暂无数据</span>
+            <span class="ldxp-status" data-role="status">选好条件后点「开始拉取」</span>
+          </div>
+          <div class="ldxp-result-tools">
+            <button class="ldxp-text-btn" data-action="export" title="把筛选后的全部结果导出为 CSV，可用 Excel 打开">导出 CSV</button>
+            <div class="ldxp-pager">
+              <button class="ldxp-icon-btn" data-action="prev" title="上一页" aria-label="上一页">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
+              </button>
+              <input data-field="pageJump" type="number" min="1" value="1" title="输入页码后按回车" aria-label="页码">
+              <span data-role="pageInfo">/ 1</span>
+              <button class="ldxp-icon-btn" data-action="next" title="下一页" aria-label="下一页">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+              </button>
+              <select data-field="pageSize" aria-label="每页条数">
+                <option value="10" selected>10 条/页</option>
+                <option value="20">20 条/页</option>
+                <option value="30">30 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -711,7 +783,7 @@
           <table>
             <thead>
               <tr>
-                <th class="ldxp-col-image">图片</th>
+                <th class="ldxp-col-image"></th>
                 <th class="ldxp-col-name">商品</th>
                 <th class="ldxp-col-shop">店铺</th>
                 <th class="ldxp-col-category">分类</th>
@@ -722,7 +794,7 @@
                 <th class="ldxp-col-number ldxp-sortable" data-sort-field="stock" title="点击按库存排序">库存</th>
                 <th class="ldxp-col-number ldxp-sortable" data-sort-field="sales" title="点击按销量排序">销量</th>
                 <th class="ldxp-col-badge">状态</th>
-                <th class="ldxp-col-badge">关联</th>
+                <th class="ldxp-col-badge">操作</th>
                 <th class="ldxp-col-badge">详情</th>
               </tr>
             </thead>
@@ -731,10 +803,9 @@
             </tbody>
           </table>
         </div>
-
       </div>
       <div class="ldxp-author-note">
-        <span>角落小纸条：觉得好用的话，下次来哇咔咔这里补一单小小感谢；挑最便宜的也完全 OK，主要是让哇咔咔开心一下。</span>
+        <span>原作者哇咔咔：觉得好用的话，可以去作者卡网补一单小小感谢，挑最便宜的也完全 OK。</span>
         <a href="https://wzyp.cn/shop/V2YZIFWM" target="_blank" rel="noopener noreferrer">作者卡网</a>
       </div>
       <div class="ldxp-resize-handle" title="拖动调整面板大小"></div>
@@ -750,9 +821,25 @@
   const titlebarEl = $(".ldxp-titlebar");
   const resizeHandleEl = $(".ldxp-resize-handle");
   const rowsEl = $('[data-role="rows"]');
+  // A dead or hotlink-protected image falls back to the same "无图" placeholder.
+  rowsEl.addEventListener(
+    "error",
+    (event) => {
+      const img = event.target;
+      if (img instanceof HTMLImageElement) {
+        const placeholder = document.createElement("span");
+        placeholder.className = "ldxp-no-image";
+        placeholder.textContent = "无图";
+        img.replaceWith(placeholder);
+      }
+    },
+    true
+  );
   const statusEl = $('[data-role="status"]');
   const summaryEl = $('[data-role="summary"]');
   const pageInfoEl = $('[data-role="pageInfo"]');
+  const prevBtnEl = $('[data-action="prev"]');
+  const nextBtnEl = $('[data-action="next"]');
   const fetchButton = $('[data-action="fetch"]');
   const connectModalEl = $('[data-role="connectModal"]');
   const detailModalEl = $('[data-role="detailModal"]');
@@ -805,12 +892,21 @@
     });
 
     if (!response.ok) {
-      const error = new Error(`接口请求失败：HTTP ${response.status}`);
-      error.retryable = response.status === 429 || response.status >= 500;
+      const info = describeHttpError(response.status, response.headers.get("x-tengine-error"));
+      const error = new Error(info.message);
+      error.retryable = info.retryable;
+      error.rateLimited = info.rateLimited;
       throw error;
     }
 
-    const payload = await response.json();
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      const error = new Error("接口返回的不是数据（可能未登录或被平台拦截），请刷新页面后重试");
+      error.retryable = false;
+      throw error;
+    }
     if (payload.code !== 1) {
       throw new Error(payload.msg || payload.message || `接口返回异常：${payload.code}`);
     }
@@ -861,10 +957,18 @@
     field("pageJump").max = String(totalPages);
     field("pageJump").value = String(state.currentPage);
     pageInfoEl.textContent = `/ ${totalPages}`;
+    // Greyed out at either end, so a click that cannot turn the page doesn't look ignored.
+    prevBtnEl.disabled = state.currentPage <= 1;
+    nextBtnEl.disabled = state.currentPage >= totalPages;
     renderSortIndicators();
 
     if (!pageItems.length) {
-      rowsEl.innerHTML = `<tr><td colspan="${TABLE_COLUMN_COUNT}" class="ldxp-empty">${state.loading ? "正在拉取..." : "暂无结果"}</td></tr>`;
+      const emptyText = state.loading
+        ? "正在拉取..."
+        : state.raw.length
+          ? "没有符合条件的商品，试试放宽筛选条件"
+          : "还没有数据。选好条件后点「开始拉取」";
+      rowsEl.innerHTML = `<tr><td colspan="${TABLE_COLUMN_COUNT}" class="ldxp-empty">${emptyText}</td></tr>`;
       return;
     }
 
@@ -932,15 +1036,23 @@
       .join("");
   };
 
+  // Resolves with the page's goods and whether the platform throttled us on the way.
   const fetchPageWithRetry = async (page, filters, signal, requestDelayMs) => {
+    let rateLimited = false;
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await fetchPage(page, filters, signal);
+        return { list: await fetchPage(page, filters, signal), rateLimited };
       } catch (error) {
+        if (error.rateLimited) {
+          rateLimited = true;
+        }
         if (attempt >= MAX_FETCH_RETRIES || !isRetryableError(error)) {
+          if (error.rateLimited) {
+            error.message = `${error.message}，请等几分钟，再把请求间隔调大到 3 到 5 秒后重试`;
+          }
           throw error;
         }
-        const delayMs = getRetryDelayMs(attempt + 1, requestDelayMs);
+        const delayMs = getRetryDelayMs(attempt + 1, requestDelayMs, error.rateLimited);
         setStatus(
           `第 ${page} 页失败（${error.message || "请求异常"}），${Math.round(delayMs / 1000)} 秒后第 ${attempt + 1} / ${MAX_FETCH_RETRIES} 次重试...`,
           "warn"
@@ -962,7 +1074,7 @@
     }
     field("requestIntervalSeconds").value = String(filters.requestIntervalSeconds);
     const fetchPageSize = getFetchPageSize(filters);
-    const requestDelayMs = getRequestDelayMs(filters);
+    let requestDelayMs = getRequestDelayMs(filters);
     state.loading = true;
     state.abortController = new AbortController();
     state.raw = [];
@@ -972,6 +1084,8 @@
     state.currentPage = 1;
     state.lastSummary = "";
     fetchButton.textContent = "停止拉取";
+    fetchButton.classList.add("is-stop");
+    setProgress(0, filters.pages);
     setStatus("正在请求第 1 页...", "busy");
     render();
 
@@ -979,13 +1093,19 @@
     try {
       for (let page = 1; page <= filters.pages; page += 1) {
         if (page > 1 && requestDelayMs > 0) {
-          setStatus(`已完成 ${completedPages} / ${filters.pages} 页，等待 ${filters.requestIntervalSeconds} 秒后请求第 ${page} 页...`, "busy");
+          setStatus(`已完成 ${completedPages} / ${filters.pages} 页，等待 ${requestDelayMs / 1000} 秒后请求第 ${page} 页...`, "busy");
           await sleep(requestDelayMs, state.abortController.signal);
         }
         setStatus(`正在请求第 ${page} / ${filters.pages} 页...`, "busy");
-        const list = await fetchPageWithRetry(page, filters, state.abortController.signal, requestDelayMs);
+        const { list, rateLimited } = await fetchPageWithRetry(page, filters, state.abortController.signal, requestDelayMs);
+        if (rateLimited && requestDelayMs < MAX_AUTO_INTERVAL_MS) {
+          requestDelayMs = getSlowerIntervalMs(requestDelayMs);
+          field("requestIntervalSeconds").value = String(requestDelayMs / 1000);
+          saveSettings();
+        }
         state.duplicates += mergeUniqueItems(state.raw, state.seenIds, list);
         completedPages = page;
+        setProgress(page, filters.pages);
         // Show results as pages arrive, without moving the reader off the page they are on.
         applyFilters({ keepPage: true });
 
@@ -1006,8 +1126,18 @@
       state.loading = false;
       state.abortController = null;
       fetchButton.textContent = "开始拉取";
+      fetchButton.classList.remove("is-stop");
+      setProgress(null);
       applyFilters({ keepPage: true });
     }
+  };
+
+  // done === null hides the bar; "全部" has no known end, so it shows a moving bar instead.
+  const setProgress = (done, total) => {
+    const bar = $('[data-role="progress"]');
+    bar.hidden = done === null;
+    bar.dataset.indeterminate = total >= MAX_FETCH_PAGES ? "1" : "";
+    $('[data-role="progressBar"]').style.width = total ? `${Math.max(4, (done / total) * 100)}%` : "0";
   };
 
   const exportCsv = () => {
@@ -1258,7 +1388,7 @@
             <div class="ldxp-connect-title">对接商品</div>
             <div class="ldxp-connect-subtitle" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
           </div>
-          <button class="ldxp-icon-btn" data-action="connectClose" title="关闭">x</button>
+          <button class="ldxp-icon-btn" data-action="connectClose" title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
         </div>
         <div class="ldxp-connect-body">
           <label>
@@ -1346,7 +1476,7 @@
           </div>
           <div class="ldxp-detail-actions">
             <a class="ldxp-detail-open" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="在新标签页打开">新窗口</a>
-            <button class="ldxp-icon-btn" data-action="detailClose" title="关闭">x</button>
+            <button class="ldxp-icon-btn" data-action="detailClose" title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
           </div>
         </div>
         <div class="ldxp-detail-hint">部分商品页不允许嵌入显示。如果下方一直空白，请点右上角「新窗口」打开。</div>
@@ -1358,7 +1488,7 @@
   }
 
   connectModalEl.addEventListener("input", (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest("[data-connect-field]") : null;
+    const target = event.target instanceof Element ? event.target.closest("[data-connect-field]") : null;
     if (!target || !["add_rate", "add_price"].includes(target.dataset.connectField || "")) {
       return;
     }
@@ -1366,7 +1496,7 @@
   });
 
   connectModalEl.addEventListener("change", (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest("[data-connect-field]") : null;
+    const target = event.target instanceof Element ? event.target.closest("[data-connect-field]") : null;
     if (!target) {
       return;
     }
@@ -1390,13 +1520,14 @@
       return;
     }
 
-    const sortHeader = event.target instanceof HTMLElement ? event.target.closest("[data-sort-field]") : null;
+    // Element, not HTMLElement: clicks on a button's SVG icon target the <svg>/<path>.
+    const sortHeader = event.target instanceof Element ? event.target.closest("[data-sort-field]") : null;
     if (sortHeader instanceof HTMLElement) {
       toggleHeaderSort(sortHeader.dataset.sortField);
       return;
     }
 
-    const actionTarget = event.target instanceof HTMLElement ? event.target.closest("[data-action]") : null;
+    const actionTarget = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     const action = actionTarget instanceof HTMLElement ? actionTarget.dataset.action : "";
     if (!action) {
       return;
@@ -1411,6 +1542,9 @@
       reset();
     } else if (action === "export") {
       exportCsv();
+    } else if (action === "toggleMore") {
+      setMoreFilters($('[data-role="more"]').hidden);
+      saveSettings();
     } else if (action === "first") {
       state.currentPage = 1;
       render();
@@ -1430,6 +1564,8 @@
       render();
     } else if (action === "collapse") {
       minimizePanel();
+    } else if (action === "maximize") {
+      toggleMaximize();
     } else if (action === "expand") {
       expandPanel();
     } else if (action === "close") {
@@ -1457,25 +1593,65 @@
         render();
         return;
       }
-      applyFilters();
+      // Enter starts a fetch when there is nothing to filter yet.
+      if (!state.raw.length && !state.loading) {
+        startFetch();
+      } else {
+        applyFilters();
+      }
     }
   });
 
-  root.querySelector(".ldxp-controls").addEventListener("change", () => saveSettings());
-  root.querySelector(".ldxp-controls").addEventListener("input", () => saveSettings());
+  // These fields only shape the next fetch; every other field re-filters the fetched goods live.
+  const FETCH_ONLY_FIELDS = new Set(["sourceMode", "agentKey", "goodsType", "pages", "requestIntervalSeconds"]);
+  let liveFilterTimer = 0;
+  const onFieldEdit = (event) => {
+    const name = event.target instanceof HTMLElement ? event.target.dataset.field : "";
+    if (!name || name === "pageJump") {
+      return;
+    }
+    saveSettings();
+    if (FETCH_ONLY_FIELDS.has(name) || !state.raw.length) {
+      return;
+    }
+    clearTimeout(liveFilterTimer);
+    liveFilterTimer = setTimeout(() => applyFilters(), event.type === "input" ? 250 : 0);
+  };
+  bodyEl.addEventListener("input", onFieldEdit);
+  bodyEl.addEventListener("change", onFieldEdit);
+
+  const syncSourceMode = () => {
+    root.dataset.mode = field("sourceMode").value;
+  };
 
   field("sourceMode").addEventListener("change", () => {
     if (field("sourceMode").value === "parent" && !field("agentKey").value.trim()) {
       field("agentKey").value = readPageAgentKey();
     }
+    syncSourceMode();
     setStatus(field("sourceMode").value === "parent"
-      ? "已切换到指定货源商读取"
-      : "已切换到开放货源搜索");
+      ? "已切换到指定货源商，填好对接码后点「开始拉取」"
+      : "已切换到开放货源");
+  });
+  syncSourceMode();
+
+  function setMoreFilters(open) {
+    const toggle = $('[data-action="toggleMore"]');
+    $('[data-role="more"]').hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "收起筛选" : "更多筛选";
+    state.layout.showMore = open;
+  }
+
+  titlebarEl.addEventListener("dblclick", (event) => {
+    if (!(event.target instanceof Element && event.target.closest("button"))) {
+      toggleMaximize();
+    }
   });
 
   let dragState = null;
   titlebarEl.addEventListener("mousedown", (event) => {
-    if (event.target instanceof HTMLElement && event.target.closest("button")) {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest("button"))) {
       return;
     }
     const rect = root.getBoundingClientRect();
@@ -1494,6 +1670,14 @@
     if (!dragState) {
       return;
     }
+    // The mouseup was lost (released over an iframe, or after a context menu): stop following the cursor.
+    if (!(event.buttons & 1)) {
+      onDragEnd();
+      return;
+    }
+    if (isMaximized()) {
+      setMaximizedFlag(false);
+    }
     const nextLeft = Math.max(8, Math.min(window.innerWidth - 120, dragState.left + event.clientX - dragState.startX));
     const nextTop = Math.max(8, Math.min(window.innerHeight - 60, dragState.top + event.clientY - dragState.startY));
     root.style.left = `${nextLeft}px`;
@@ -1510,6 +1694,9 @@
   let miniDragState = null;
   const miniLauncherEl = $(".ldxp-mini-launcher");
   miniLauncherEl.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
     const rect = root.getBoundingClientRect();
     miniDragState = {
       startX: event.clientX,
@@ -1526,6 +1713,10 @@
 
   function onMiniDragMove(event) {
     if (!miniDragState) {
+      return;
+    }
+    if (!(event.buttons & 1)) {
+      onMiniDragEnd();
       return;
     }
 
@@ -1622,6 +1813,12 @@
 
   let resizeState = null;
   resizeHandleEl.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    if (isMaximized()) {
+      setMaximizedFlag(false);
+    }
     const rootRect = root.getBoundingClientRect();
     const panelRect = panelEl.getBoundingClientRect();
     resizeState = {
@@ -1652,6 +1849,10 @@
     if (!resizeState) {
       return;
     }
+    if (!(event.buttons & 1)) {
+      onResizeEnd();
+      return;
+    }
 
     const edgeGap = VIEWPORT_GAP;
     const minWidth = Math.min(680, window.innerWidth - 20);
@@ -1678,6 +1879,58 @@
     document.removeEventListener("mouseup", onResizeEnd);
   }
 
+  // ---------- maximize ----------
+
+  const MAXIMIZE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>';
+  const RESTORE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="5" width="8" height="8" rx="1.5"/><path d="M6 3h5.5A1.5 1.5 0 0 1 13 4.5V10"/></svg>';
+
+  function isMaximized() {
+    return root.dataset.maximized === "1";
+  }
+
+  function setMaximizedFlag(on) {
+    const button = $('[data-role="maximizeBtn"]');
+    root.dataset.maximized = on ? "1" : "";
+    root.style.maxHeight = on ? "none" : "";
+    button.innerHTML = on ? RESTORE_ICON : MAXIMIZE_ICON;
+    button.title = on ? "还原" : "最大化";
+    button.setAttribute("aria-label", button.title);
+  }
+
+  function applyMaximizedSize() {
+    root.style.left = `${VIEWPORT_GAP}px`;
+    root.style.top = `${VIEWPORT_GAP}px`;
+    root.style.right = "auto";
+    root.style.width = `${window.innerWidth - VIEWPORT_GAP * 2}px`;
+    panelEl.style.height = `${window.innerHeight - VIEWPORT_GAP * 2}px`;
+    bodyEl.style.height = "";
+    bodyEl.style.maxHeight = "";
+  }
+
+  function toggleMaximize() {
+    if (root.classList.contains("is-minimized")) {
+      return;
+    }
+    if (isMaximized()) {
+      const saved = state.restoreRect || {};
+      setMaximizedFlag(false);
+      root.style.width = saved.width || "";
+      panelEl.style.height = saved.height || "";
+      root.style.left = saved.left || "";
+      root.style.top = saved.top || "";
+      fitToViewport();
+      return;
+    }
+    state.restoreRect = {
+      width: root.style.width,
+      height: panelEl.style.height,
+      left: root.style.left,
+      top: root.style.top
+    };
+    setMaximizedFlag(true);
+    applyMaximizedSize();
+  }
+
   // Shrinks the expanded panel to the window and pulls it, or the capsule, back on screen.
   function fitToViewport() {
     if (root.style.display === "none") {
@@ -1687,6 +1940,10 @@
       const rect = root.getBoundingClientRect();
       root.style.left = `${Math.round(Math.max(VIEWPORT_GAP, Math.min(window.innerWidth - MINI_WIDTH - VIEWPORT_GAP, rect.left)))}px`;
       root.style.top = `${Math.round(Math.max(VIEWPORT_GAP, Math.min(window.innerHeight - MINI_HEIGHT - VIEWPORT_GAP, rect.top)))}px`;
+      return;
+    }
+    if (isMaximized()) {
+      applyMaximizedSize();
       return;
     }
     const maxWidth = window.innerWidth - VIEWPORT_GAP * 2;
@@ -1759,6 +2016,9 @@
       state.layout.height = layout.height;
       root.dataset.expandedWidth = `${layout.width}px`;
       root.dataset.expandedPanelHeight = `${layout.height}px`;
+    }
+    if (layout.showMore) {
+      setMoreFilters(true);
     }
     if (Number.isFinite(layout.miniLeft) && Number.isFinite(layout.miniTop) && root.classList.contains("is-minimized")) {
       state.layout.miniLeft = layout.miniLeft;
