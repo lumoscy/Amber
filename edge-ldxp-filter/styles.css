@@ -52,6 +52,11 @@
   width: 16px;
 }
 
+/* Let clicks on an icon land on its button. */
+#ldxp-edge-filter-root button svg {
+  pointer-events: none;
+}
+
 /* ---------- panel shell ---------- */
 
 #ldxp-edge-filter-root .ldxp-panel {

@@ -599,6 +599,9 @@
           <button class="ldxp-icon-btn" data-action="collapse" title="最小化" aria-label="最小化">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg>
           </button>
+          <button class="ldxp-icon-btn" data-action="maximize" data-role="maximizeBtn" title="最大化" aria-label="最大化">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>
+          </button>
           <button class="ldxp-icon-btn" data-action="close" title="关闭" aria-label="关闭">
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
           </button>
@@ -1435,7 +1438,7 @@
   }
 
   connectModalEl.addEventListener("input", (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest("[data-connect-field]") : null;
+    const target = event.target instanceof Element ? event.target.closest("[data-connect-field]") : null;
     if (!target || !["add_rate", "add_price"].includes(target.dataset.connectField || "")) {
       return;
     }
@@ -1443,7 +1446,7 @@
   });
 
   connectModalEl.addEventListener("change", (event) => {
-    const target = event.target instanceof HTMLElement ? event.target.closest("[data-connect-field]") : null;
+    const target = event.target instanceof Element ? event.target.closest("[data-connect-field]") : null;
     if (!target) {
       return;
     }
@@ -1467,13 +1470,14 @@
       return;
     }
 
-    const sortHeader = event.target instanceof HTMLElement ? event.target.closest("[data-sort-field]") : null;
+    // Element, not HTMLElement: clicks on a button's SVG icon target the <svg>/<path>.
+    const sortHeader = event.target instanceof Element ? event.target.closest("[data-sort-field]") : null;
     if (sortHeader instanceof HTMLElement) {
       toggleHeaderSort(sortHeader.dataset.sortField);
       return;
     }
 
-    const actionTarget = event.target instanceof HTMLElement ? event.target.closest("[data-action]") : null;
+    const actionTarget = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     const action = actionTarget instanceof HTMLElement ? actionTarget.dataset.action : "";
     if (!action) {
       return;
@@ -1510,6 +1514,8 @@
       render();
     } else if (action === "collapse") {
       minimizePanel();
+    } else if (action === "maximize") {
+      toggleMaximize();
     } else if (action === "expand") {
       expandPanel();
     } else if (action === "close") {
@@ -1587,9 +1593,15 @@
     state.layout.showMore = open;
   }
 
+  titlebarEl.addEventListener("dblclick", (event) => {
+    if (!(event.target instanceof Element && event.target.closest("button"))) {
+      toggleMaximize();
+    }
+  });
+
   let dragState = null;
   titlebarEl.addEventListener("mousedown", (event) => {
-    if (event.target instanceof HTMLElement && event.target.closest("button")) {
+    if (event.target instanceof Element && event.target.closest("button")) {
       return;
     }
     const rect = root.getBoundingClientRect();
@@ -1607,6 +1619,9 @@
   function onDragMove(event) {
     if (!dragState) {
       return;
+    }
+    if (isMaximized()) {
+      setMaximizedFlag(false);
     }
     const nextLeft = Math.max(8, Math.min(window.innerWidth - 120, dragState.left + event.clientX - dragState.startX));
     const nextTop = Math.max(8, Math.min(window.innerHeight - 60, dragState.top + event.clientY - dragState.startY));
@@ -1736,6 +1751,9 @@
 
   let resizeState = null;
   resizeHandleEl.addEventListener("mousedown", (event) => {
+    if (isMaximized()) {
+      setMaximizedFlag(false);
+    }
     const rootRect = root.getBoundingClientRect();
     const panelRect = panelEl.getBoundingClientRect();
     resizeState = {
@@ -1792,6 +1810,58 @@
     document.removeEventListener("mouseup", onResizeEnd);
   }
 
+  // ---------- maximize ----------
+
+  const MAXIMIZE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg>';
+  const RESTORE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="5" width="8" height="8" rx="1.5"/><path d="M6 3h5.5A1.5 1.5 0 0 1 13 4.5V10"/></svg>';
+
+  function isMaximized() {
+    return root.dataset.maximized === "1";
+  }
+
+  function setMaximizedFlag(on) {
+    const button = $('[data-role="maximizeBtn"]');
+    root.dataset.maximized = on ? "1" : "";
+    root.style.maxHeight = on ? "none" : "";
+    button.innerHTML = on ? RESTORE_ICON : MAXIMIZE_ICON;
+    button.title = on ? "还原" : "最大化";
+    button.setAttribute("aria-label", button.title);
+  }
+
+  function applyMaximizedSize() {
+    root.style.left = `${VIEWPORT_GAP}px`;
+    root.style.top = `${VIEWPORT_GAP}px`;
+    root.style.right = "auto";
+    root.style.width = `${window.innerWidth - VIEWPORT_GAP * 2}px`;
+    panelEl.style.height = `${window.innerHeight - VIEWPORT_GAP * 2}px`;
+    bodyEl.style.height = "";
+    bodyEl.style.maxHeight = "";
+  }
+
+  function toggleMaximize() {
+    if (root.classList.contains("is-minimized")) {
+      return;
+    }
+    if (isMaximized()) {
+      const saved = state.restoreRect || {};
+      setMaximizedFlag(false);
+      root.style.width = saved.width || "";
+      panelEl.style.height = saved.height || "";
+      root.style.left = saved.left || "";
+      root.style.top = saved.top || "";
+      fitToViewport();
+      return;
+    }
+    state.restoreRect = {
+      width: root.style.width,
+      height: panelEl.style.height,
+      left: root.style.left,
+      top: root.style.top
+    };
+    setMaximizedFlag(true);
+    applyMaximizedSize();
+  }
+
   // Shrinks the expanded panel to the window and pulls it, or the capsule, back on screen.
   function fitToViewport() {
     if (root.style.display === "none") {
@@ -1801,6 +1871,10 @@
       const rect = root.getBoundingClientRect();
       root.style.left = `${Math.round(Math.max(VIEWPORT_GAP, Math.min(window.innerWidth - MINI_WIDTH - VIEWPORT_GAP, rect.left)))}px`;
       root.style.top = `${Math.round(Math.max(VIEWPORT_GAP, Math.min(window.innerHeight - MINI_HEIGHT - VIEWPORT_GAP, rect.top)))}px`;
+      return;
+    }
+    if (isMaximized()) {
+      applyMaximizedSize();
       return;
     }
     const maxWidth = window.innerWidth - VIEWPORT_GAP * 2;
