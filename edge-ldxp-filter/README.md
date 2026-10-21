@@ -1,6 +1,6 @@
 # 链动小铺货源增强筛选 浏览器扩展
 
-> **来源说明**：本目录基于 [WowJokerH/edge-ldxp-filter](https://github.com/WowJokerH/edge-ldxp-filter)（提交 `73bddaf`，版本 1.0.19）修改，原作者为 WowJokerH（哇咔咔）。原项目未声明开源许可证，版权归原作者所有；这里的修改（1.1.0）计划以 PR 的形式反馈给原项目。
+> **来源说明**：本目录基于 [WowJokerH/edge-ldxp-filter](https://github.com/WowJokerH/edge-ldxp-filter)（提交 `73bddaf`，版本 1.0.19）修改，原作者为 WowJokerH（哇咔咔）。原项目未声明开源许可证，版权归原作者所有；这里的修改（当前版本 1.2.2）计划以 PR 的形式反馈给原项目。
 
 这是一个不依赖油猴的本地浏览器扩展，兼容 Microsoft Edge 和 Google Chrome（基于 Manifest V3）。打开链动小铺相关页面后，扩展会自动显示一个悬浮小胶囊；点击胶囊展开筛选面板后，可以通过原站接口拉取数据，并在浏览器本地做筛选、排序和分页展示。
 
