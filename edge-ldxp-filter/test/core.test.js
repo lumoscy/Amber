@@ -108,3 +108,25 @@ test("retry rules", () => {
   assert.equal(api.getRetryDelayMs(3, 1000), 8000);
   assert.equal(api.getRetryDelayMs(3, 20000), 60000);
 });
+
+test("CDN rate limit (HTTP 403 + X-Tengine-Error) is retried with a long wait", () => {
+  const limited = api.describeHttpError(403, "denied by http_ratelimit");
+  assert.equal(limited.rateLimited, true);
+  assert.equal(limited.retryable, true);
+  assert.equal(api.describeHttpError(429).rateLimited, true);
+
+  const forbidden = api.describeHttpError(403, null);
+  assert.equal(forbidden.retryable, false);
+  assert.match(forbidden.message, /登录/);
+  assert.equal(api.describeHttpError(502).retryable, true);
+
+  assert.equal(api.getRetryDelayMs(1, 1000, true), 15000);
+  assert.equal(api.getRetryDelayMs(2, 1000, true), 30000);
+  assert.equal(api.getRetryDelayMs(3, 1000, true), 60000);
+});
+
+test("interval slows down after a rate limit, capped at 10 seconds", () => {
+  assert.equal(api.getSlowerIntervalMs(1000), 2000);
+  assert.equal(api.getSlowerIntervalMs(4000), 8000);
+  assert.equal(api.getSlowerIntervalMs(8000), 10000);
+});

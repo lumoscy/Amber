@@ -12,6 +12,8 @@
   const MAX_REQUEST_INTERVAL_SECONDS = 120;
   const MAX_FETCH_RETRIES = 3;
   const MIN_RETRY_DELAY_MS = 2000;
+  const RATE_LIMIT_RETRY_DELAY_MS = 15000;
+  const MAX_AUTO_INTERVAL_MS = 10000;
   const MAX_RETRY_DELAY_MS = 60000;
   const SETTINGS_STORAGE_KEY = "ldxpEdgeFilterSettings";
   const SHOW_PANEL_MESSAGE = "ldxp-edge-filter:show";
@@ -521,8 +523,28 @@
     return RETRYABLE_MESSAGE.test(asText(error.message));
   };
 
-  const getRetryDelayMs = (attempt, requestDelayMs) =>
-    Math.min(Math.max(requestDelayMs, MIN_RETRY_DELAY_MS) * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+  // A rate limit needs a much longer pause than a flaky connection before it lifts.
+  const getRetryDelayMs = (attempt, requestDelayMs, rateLimited = false) =>
+    Math.min(
+      Math.max(requestDelayMs, rateLimited ? RATE_LIMIT_RETRY_DELAY_MS : MIN_RETRY_DELAY_MS) * 2 ** (attempt - 1),
+      MAX_RETRY_DELAY_MS
+    );
+
+  // The site's CDN (Alibaba Cloud ESA / Tengine) rejects throttled requests with HTTP 403
+  // plus `X-Tengine-Error: denied by http_ratelimit`, not with 429.
+  const describeHttpError = (status, tengineError = "") => {
+    if (status === 429 || /ratelimit/i.test(asText(tengineError))) {
+      return { message: "触发平台限流（请求太频繁）", retryable: true, rateLimited: true };
+    }
+    if (status === 401 || status === 403) {
+      return { message: `接口拒绝访问（HTTP ${status}）：请确认已登录，并在 www.ldxp.cn 商家后台页面使用`, retryable: false, rateLimited: false };
+    }
+    return { message: `接口请求失败：HTTP ${status}`, retryable: status >= 500, rateLimited: false };
+  };
+
+  // After a rate limit, slow the remaining pages down: double the interval, capped at 10 seconds.
+  const getSlowerIntervalMs = (requestDelayMs) =>
+    Math.min(Math.max(requestDelayMs * 2, MIN_RETRY_DELAY_MS), MAX_AUTO_INTERVAL_MS);
 
   if (globalThis.__LDXP_EDGE_FILTER_TEST_EXPORTS__) {
     globalThis.__LDXP_EDGE_FILTER_TEST_EXPORTS__({
@@ -550,7 +572,9 @@
       filterItems,
       toCsv,
       isRetryableError,
-      getRetryDelayMs
+      getRetryDelayMs,
+      describeHttpError,
+      getSlowerIntervalMs
     });
     return;
   }
@@ -805,8 +829,10 @@
     });
 
     if (!response.ok) {
-      const error = new Error(`接口请求失败：HTTP ${response.status}`);
-      error.retryable = response.status === 429 || response.status >= 500;
+      const info = describeHttpError(response.status, response.headers.get("x-tengine-error"));
+      const error = new Error(info.message);
+      error.retryable = info.retryable;
+      error.rateLimited = info.rateLimited;
       throw error;
     }
 
@@ -932,15 +958,23 @@
       .join("");
   };
 
+  // Resolves with the page's goods and whether the platform throttled us on the way.
   const fetchPageWithRetry = async (page, filters, signal, requestDelayMs) => {
+    let rateLimited = false;
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await fetchPage(page, filters, signal);
+        return { list: await fetchPage(page, filters, signal), rateLimited };
       } catch (error) {
+        if (error.rateLimited) {
+          rateLimited = true;
+        }
         if (attempt >= MAX_FETCH_RETRIES || !isRetryableError(error)) {
+          if (error.rateLimited) {
+            error.message = `${error.message}，请等几分钟，再把请求间隔调大到 3 到 5 秒后重试`;
+          }
           throw error;
         }
-        const delayMs = getRetryDelayMs(attempt + 1, requestDelayMs);
+        const delayMs = getRetryDelayMs(attempt + 1, requestDelayMs, error.rateLimited);
         setStatus(
           `第 ${page} 页失败（${error.message || "请求异常"}），${Math.round(delayMs / 1000)} 秒后第 ${attempt + 1} / ${MAX_FETCH_RETRIES} 次重试...`,
           "warn"
@@ -962,7 +996,7 @@
     }
     field("requestIntervalSeconds").value = String(filters.requestIntervalSeconds);
     const fetchPageSize = getFetchPageSize(filters);
-    const requestDelayMs = getRequestDelayMs(filters);
+    let requestDelayMs = getRequestDelayMs(filters);
     state.loading = true;
     state.abortController = new AbortController();
     state.raw = [];
@@ -979,11 +1013,16 @@
     try {
       for (let page = 1; page <= filters.pages; page += 1) {
         if (page > 1 && requestDelayMs > 0) {
-          setStatus(`已完成 ${completedPages} / ${filters.pages} 页，等待 ${filters.requestIntervalSeconds} 秒后请求第 ${page} 页...`, "busy");
+          setStatus(`已完成 ${completedPages} / ${filters.pages} 页，等待 ${requestDelayMs / 1000} 秒后请求第 ${page} 页...`, "busy");
           await sleep(requestDelayMs, state.abortController.signal);
         }
         setStatus(`正在请求第 ${page} / ${filters.pages} 页...`, "busy");
-        const list = await fetchPageWithRetry(page, filters, state.abortController.signal, requestDelayMs);
+        const { list, rateLimited } = await fetchPageWithRetry(page, filters, state.abortController.signal, requestDelayMs);
+        if (rateLimited && requestDelayMs < MAX_AUTO_INTERVAL_MS) {
+          requestDelayMs = getSlowerIntervalMs(requestDelayMs);
+          field("requestIntervalSeconds").value = String(requestDelayMs / 1000);
+          saveSettings();
+        }
         state.duplicates += mergeUniqueItems(state.raw, state.seenIds, list);
         completedPages = page;
         // Show results as pages arrive, without moving the reader off the page they are on.
