@@ -130,3 +130,24 @@ test("interval slows down after a rate limit, capped at 10 seconds", () => {
   assert.equal(api.getSlowerIntervalMs(4000), 8000);
   assert.equal(api.getSlowerIntervalMs(8000), 10000);
 });
+
+test("goods image comes from the first <img> in the description", () => {
+  const item = {
+    description: '<p>说明</p><p><img src="https://qn.ldxp.cn/f9/a.png" alt="image.png"/></p><img src="https://qn.ldxp.cn/b.png">',
+    user: { avatar: "https://qn.ldxp.cn/94/avatar.png" }
+  };
+  assert.equal(api.getImage(item), "https://qn.ldxp.cn/f9/a.png");
+  assert.equal(api.getImage({ description: "<img alt='x' src='//qn.ldxp.cn/c.png?a=1&amp;b=2'>" }), "https://qn.ldxp.cn/c.png?a=1&b=2");
+  assert.equal(api.getImage({ description: '<img src="/uploads/d.webp">' }), "https://www.ldxp.cn/uploads/d.webp");
+});
+
+test("goods image falls back to a direct field, then the merchant avatar", () => {
+  assert.equal(api.getImage({ image: "https://a.cn/1.png", description: '<img src="https://a.cn/2.png">' }), "https://a.cn/1.png");
+  assert.equal(api.getImage({ description: "<p>无图</p>", user: { avatar: "https://qn.ldxp.cn/94/avatar.png" } }), "https://qn.ldxp.cn/94/avatar.png");
+});
+
+test("goods without a usable image stay empty", () => {
+  assert.equal(api.getImage({ name: "abc", description: "<p>纯文字</p>", user: { avatar: "" } }), "");
+  assert.equal(api.getImage({ description: '<img src="javascript:alert(1)">' }), "");
+  assert.equal(api.getImage(null), "");
+});

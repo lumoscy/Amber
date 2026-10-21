@@ -129,8 +129,38 @@
       getProductId(item)
     ].join(" ");
 
-  const getImage = (item) =>
-    item.image || item.cover || item.thumb || "";
+  // searchGoodsList has no image field of its own: the goods picture only appears as an
+  // <img> inside the description HTML, so use the first one, then the merchant's avatar.
+  const DESCRIPTION_IMAGE_PATTERN = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/i;
+
+  const toImageUrl = (value) => {
+    const text = asText(value).trim().replace(/&amp;/g, "&");
+    if (!text) {
+      return "";
+    }
+    try {
+      const parsed = new URL(text, location.origin);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+    } catch (_) {
+      return "";
+    }
+  };
+
+  const getDescriptionImage = (item) => {
+    const match = asText(item.description).match(DESCRIPTION_IMAGE_PATTERN);
+    return match ? toImageUrl(match[1]) : "";
+  };
+
+  const getImage = (item) => {
+    if (!item || typeof item !== "object") {
+      return "";
+    }
+    return (
+      toImageUrl(item.image || item.img || item.cover || item.thumb) ||
+      getDescriptionImage(item) ||
+      toImageUrl(item.user?.avatar)
+    );
+  };
 
   const getStock = (item) => asNumber(item.stock_count, null);
 
@@ -567,6 +597,7 @@
       calculateConnectPrice,
       getProfit,
       getProfitRate,
+      getImage,
       mergeUniqueItems,
       sortItems,
       filterItems,
@@ -790,6 +821,20 @@
   const titlebarEl = $(".ldxp-titlebar");
   const resizeHandleEl = $(".ldxp-resize-handle");
   const rowsEl = $('[data-role="rows"]');
+  // A dead or hotlink-protected image falls back to the same "无图" placeholder.
+  rowsEl.addEventListener(
+    "error",
+    (event) => {
+      const img = event.target;
+      if (img instanceof HTMLImageElement) {
+        const placeholder = document.createElement("span");
+        placeholder.className = "ldxp-no-image";
+        placeholder.textContent = "无图";
+        img.replaceWith(placeholder);
+      }
+    },
+    true
+  );
   const statusEl = $('[data-role="status"]');
   const summaryEl = $('[data-role="summary"]');
   const pageInfoEl = $('[data-role="pageInfo"]');
