@@ -585,43 +585,44 @@
   const defaultAgentKey = readPageAgentKey();
   root.id = ROOT_ID;
   root.innerHTML = `
-    <button class="ldxp-mini-launcher" data-action="expand" title="展开货源增强筛选">
+    <button class="ldxp-mini-launcher" data-action="expand" title="展开货源筛选">
       <img class="ldxp-mini-icon" src="${iconUrl}" alt="">
     </button>
     <div class="ldxp-panel">
       <div class="ldxp-titlebar">
-        <div>
-          <div class="ldxp-title">
-            <span class="ldxp-title-mark">筛</span>
-            <span>货源增强筛选</span>
-            <span class="ldxp-title-badge">轻甜版</span>
-          </div>
-          <div class="ldxp-subtitle">拉取接口数据后在本页筛选，不修改原站数据</div>
+        <div class="ldxp-title">
+          <img class="ldxp-title-icon" src="${iconUrl}" alt="">
+          <span>货源筛选</span>
+          <span class="ldxp-subtitle">拉取后在本页筛选，不修改原站数据</span>
         </div>
         <div class="ldxp-title-actions">
-          <button class="ldxp-icon-btn" data-action="collapse" title="最小化">-</button>
-          <button class="ldxp-icon-btn" data-action="close" title="关闭">x</button>
+          <button class="ldxp-icon-btn" data-action="collapse" title="最小化" aria-label="最小化">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"/></svg>
+          </button>
+          <button class="ldxp-icon-btn" data-action="close" title="关闭" aria-label="关闭">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+          </button>
         </div>
       </div>
 
       <div class="ldxp-body">
-        <div class="ldxp-controls">
-          <label>
+        <div class="ldxp-fetchbar">
+          <label class="ldxp-field ldxp-field-source">
             <span>数据来源</span>
             <select data-field="sourceMode">
-              <option value="open" ${defaultSourceMode === "open" ? "selected" : ""}>开放货源搜索</option>
+              <option value="open" ${defaultSourceMode === "open" ? "selected" : ""}>开放货源</option>
               <option value="parent" ${defaultSourceMode === "parent" ? "selected" : ""}>指定货源商</option>
             </select>
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-agent">
             <span>货源对接码</span>
-            <input data-field="agentKey" value="${escapeHtml(defaultAgentKey)}" placeholder="对接码 / agent_key">
+            <input data-field="agentKey" value="${escapeHtml(defaultAgentKey)}" placeholder="对方给你的对接码">
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-keyword">
             <span>关键词</span>
-            <input data-field="keyword" type="search" placeholder="商品名 / 店铺 / 分类">
+            <input data-field="keyword" type="search" placeholder="商品名、店铺或分类，留空拉取全部">
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-type">
             <span>商品类型</span>
             <select data-field="goodsType">
               <option value="">全部</option>
@@ -631,103 +632,116 @@
               <option value="rights">权益</option>
             </select>
           </label>
-          <label>
+          <label class="ldxp-field ldxp-field-pages">
             <span>拉取页数</span>
-            <input data-field="pages" type="number" min="1" max="${MAX_FETCH_PAGES}" value="5">
+            <select data-field="pages">
+              <option value="5" selected>5 页</option>
+              <option value="10">10 页</option>
+              <option value="20">20 页</option>
+              <option value="50">50 页</option>
+              <option value="${MAX_FETCH_PAGES}">全部</option>
+            </select>
           </label>
-          <label>
-            <span>请求间隔(秒)</span>
-            <input data-field="requestIntervalSeconds" type="number" min="${MIN_REQUEST_INTERVAL_SECONDS}" max="${MAX_REQUEST_INTERVAL_SECONDS}" step="0.1" value="${DEFAULT_REQUEST_INTERVAL_SECONDS}">
-          </label>
-          <label>
-            <span>成本价最低</span>
-            <input data-field="minCost" type="number" min="0" step="0.01" placeholder="不限">
-          </label>
-          <label>
-            <span>成本价最高</span>
-            <input data-field="maxCost" type="number" min="0" step="0.01" placeholder="不限">
-          </label>
-          <label>
+          <button class="ldxp-primary ldxp-fetch-btn" data-action="fetch">开始拉取</button>
+        </div>
+
+        <div class="ldxp-filterbar">
+          <div class="ldxp-field ldxp-field-range">
+            <span>成本价</span>
+            <div class="ldxp-range">
+              <input data-field="minCost" type="number" min="0" step="0.01" placeholder="最低" aria-label="成本价最低">
+              <i>–</i>
+              <input data-field="maxCost" type="number" min="0" step="0.01" placeholder="最高" aria-label="成本价最高">
+            </div>
+          </div>
+          <label class="ldxp-field">
             <span>库存</span>
             <select data-field="stockMode">
               <option value="all">全部</option>
-              <option value="in">仅有库存</option>
-              <option value="out">仅无库存</option>
+              <option value="in">有库存</option>
+              <option value="out">无库存</option>
             </select>
           </label>
-          <label>
-            <span>状态</span>
+          <label class="ldxp-field">
+            <span>对接状态</span>
+            <select data-field="connected">
+              <option value="all">全部</option>
+              <option value="unlinked">未对接</option>
+              <option value="linked">已对接</option>
+            </select>
+          </label>
+          <label class="ldxp-field ldxp-field-sort">
+            <span>排序</span>
+            <select data-field="sort">
+              <option value="default">默认</option>
+              <option value="costAsc">成本价从低到高</option>
+              <option value="costDesc">成本价从高到低</option>
+              <option value="priceAsc">售价从低到高</option>
+              <option value="priceDesc">售价从高到低</option>
+              <option value="profitDesc">差价从高到低</option>
+              <option value="profitAsc">差价从低到高</option>
+              <option value="profitRateDesc">利润率从高到低</option>
+              <option value="profitRateAsc">利润率从低到高</option>
+              <option value="stockAsc">库存从少到多</option>
+              <option value="stockDesc">库存从多到少</option>
+              <option value="salesDesc">销量从高到低</option>
+              <option value="salesAsc">销量从低到高</option>
+            </select>
+          </label>
+          <div class="ldxp-filter-tools">
+            <button class="ldxp-text-btn" data-action="toggleMore" aria-expanded="false">更多筛选</button>
+            <button class="ldxp-text-btn" data-action="reset">重置</button>
+          </div>
+        </div>
+
+        <div class="ldxp-morebar" data-role="more" hidden>
+          <label class="ldxp-field">
+            <span>上架状态</span>
             <select data-field="statusMode">
               <option value="all">全部</option>
               <option value="normal">正常</option>
               <option value="off">未上架</option>
             </select>
           </label>
-          <label>
-            <span>关联状态</span>
-            <select data-field="connected">
-              <option value="all">全部</option>
-              <option value="linked">已对接</option>
-              <option value="unlinked">未对接</option>
-            </select>
+          <label class="ldxp-field">
+            <span>分类包含</span>
+            <input data-field="categoryKeyword" type="search" placeholder="例如：会员">
           </label>
-          <label>
-            <span>分类关键词</span>
-            <input data-field="categoryKeyword" type="search" placeholder="分类包含">
+          <label class="ldxp-field">
+            <span>商家包含</span>
+            <input data-field="merchantKeyword" type="search" placeholder="商家名称">
           </label>
-          <label>
-            <span>商家名称</span>
-            <input data-field="merchantKeyword" type="search" placeholder="商家包含">
-          </label>
-          <label>
-            <span>排序</span>
-            <select data-field="sort">
-              <option value="default">默认</option>
-              <option value="costAsc">成本价升序</option>
-              <option value="costDesc">成本价降序</option>
-              <option value="priceAsc">售价升序</option>
-              <option value="priceDesc">售价降序</option>
-              <option value="profitDesc">差价降序</option>
-              <option value="profitAsc">差价升序</option>
-              <option value="profitRateDesc">利润率降序</option>
-              <option value="profitRateAsc">利润率升序</option>
-              <option value="stockAsc">库存升序</option>
-              <option value="stockDesc">库存降序</option>
-              <option value="salesDesc">销量降序</option>
-              <option value="salesAsc">销量升序</option>
-            </select>
-          </label>
-          <label>
-            <span>每页显示</span>
-            <select data-field="pageSize">
-              <option value="5">5</option>
-              <option value="10" selected>10</option>
-              <option value="15">15</option>
-              <option value="20">20</option>
-              <option value="25">25</option>
-              <option value="30">30</option>
-            </select>
+          <label class="ldxp-field" title="每页请求之间的等待时间。被平台限流时调到 3 到 5 秒">
+            <span>请求间隔（秒）</span>
+            <input data-field="requestIntervalSeconds" type="number" min="${MIN_REQUEST_INTERVAL_SECONDS}" max="${MAX_REQUEST_INTERVAL_SECONDS}" step="0.1" value="${DEFAULT_REQUEST_INTERVAL_SECONDS}">
           </label>
         </div>
 
-        <div class="ldxp-actions">
-          <button class="ldxp-primary" data-action="fetch">开始拉取</button>
-          <button data-action="apply">筛选当前数据</button>
-          <button data-action="reset">重置</button>
-          <button data-action="export" title="把筛选后的全部结果导出为 CSV，可用 Excel 打开">导出 CSV</button>
-          <span class="ldxp-status" data-role="status">等待操作</span>
-        </div>
+        <div class="ldxp-progress" data-role="progress" hidden><i data-role="progressBar"></i></div>
 
         <div class="ldxp-resultbar">
-          <span data-role="summary">暂无数据</span>
-          <div class="ldxp-pager">
-            <button data-action="first">首页</button>
-            <button data-action="prev">上一页</button>
-            <input data-field="pageJump" type="number" min="1" value="1" title="页码">
-            <button data-action="jump">跳转</button>
-            <span data-role="pageInfo">/ 1</span>
-            <button data-action="next">下一页</button>
-            <button data-action="last">末页</button>
+          <div class="ldxp-result-info">
+            <span class="ldxp-summary" data-role="summary">暂无数据</span>
+            <span class="ldxp-status" data-role="status">选好条件后点「开始拉取」</span>
+          </div>
+          <div class="ldxp-result-tools">
+            <button class="ldxp-text-btn" data-action="export" title="把筛选后的全部结果导出为 CSV，可用 Excel 打开">导出 CSV</button>
+            <div class="ldxp-pager">
+              <button class="ldxp-icon-btn" data-action="prev" title="上一页" aria-label="上一页">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3L5 8l5 5"/></svg>
+              </button>
+              <input data-field="pageJump" type="number" min="1" value="1" title="输入页码后按回车" aria-label="页码">
+              <span data-role="pageInfo">/ 1</span>
+              <button class="ldxp-icon-btn" data-action="next" title="下一页" aria-label="下一页">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+              </button>
+              <select data-field="pageSize" aria-label="每页条数">
+                <option value="10" selected>10 条/页</option>
+                <option value="20">20 条/页</option>
+                <option value="30">30 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -735,7 +749,7 @@
           <table>
             <thead>
               <tr>
-                <th class="ldxp-col-image">图片</th>
+                <th class="ldxp-col-image"></th>
                 <th class="ldxp-col-name">商品</th>
                 <th class="ldxp-col-shop">店铺</th>
                 <th class="ldxp-col-category">分类</th>
@@ -746,7 +760,7 @@
                 <th class="ldxp-col-number ldxp-sortable" data-sort-field="stock" title="点击按库存排序">库存</th>
                 <th class="ldxp-col-number ldxp-sortable" data-sort-field="sales" title="点击按销量排序">销量</th>
                 <th class="ldxp-col-badge">状态</th>
-                <th class="ldxp-col-badge">关联</th>
+                <th class="ldxp-col-badge">操作</th>
                 <th class="ldxp-col-badge">详情</th>
               </tr>
             </thead>
@@ -755,10 +769,9 @@
             </tbody>
           </table>
         </div>
-
       </div>
       <div class="ldxp-author-note">
-        <span>角落小纸条：觉得好用的话，下次来哇咔咔这里补一单小小感谢；挑最便宜的也完全 OK，主要是让哇咔咔开心一下。</span>
+        <span>原作者哇咔咔：觉得好用的话，可以去作者卡网补一单小小感谢，挑最便宜的也完全 OK。</span>
         <a href="https://wzyp.cn/shop/V2YZIFWM" target="_blank" rel="noopener noreferrer">作者卡网</a>
       </div>
       <div class="ldxp-resize-handle" title="拖动调整面板大小"></div>
@@ -836,7 +849,14 @@
       throw error;
     }
 
-    const payload = await response.json();
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (_) {
+      const error = new Error("接口返回的不是数据（可能未登录或被平台拦截），请刷新页面后重试");
+      error.retryable = false;
+      throw error;
+    }
     if (payload.code !== 1) {
       throw new Error(payload.msg || payload.message || `接口返回异常：${payload.code}`);
     }
@@ -890,7 +910,12 @@
     renderSortIndicators();
 
     if (!pageItems.length) {
-      rowsEl.innerHTML = `<tr><td colspan="${TABLE_COLUMN_COUNT}" class="ldxp-empty">${state.loading ? "正在拉取..." : "暂无结果"}</td></tr>`;
+      const emptyText = state.loading
+        ? "正在拉取..."
+        : state.raw.length
+          ? "没有符合条件的商品，试试放宽筛选条件"
+          : "还没有数据。选好条件后点「开始拉取」";
+      rowsEl.innerHTML = `<tr><td colspan="${TABLE_COLUMN_COUNT}" class="ldxp-empty">${emptyText}</td></tr>`;
       return;
     }
 
@@ -1006,6 +1031,8 @@
     state.currentPage = 1;
     state.lastSummary = "";
     fetchButton.textContent = "停止拉取";
+    fetchButton.classList.add("is-stop");
+    setProgress(0, filters.pages);
     setStatus("正在请求第 1 页...", "busy");
     render();
 
@@ -1025,6 +1052,7 @@
         }
         state.duplicates += mergeUniqueItems(state.raw, state.seenIds, list);
         completedPages = page;
+        setProgress(page, filters.pages);
         // Show results as pages arrive, without moving the reader off the page they are on.
         applyFilters({ keepPage: true });
 
@@ -1045,8 +1073,18 @@
       state.loading = false;
       state.abortController = null;
       fetchButton.textContent = "开始拉取";
+      fetchButton.classList.remove("is-stop");
+      setProgress(null);
       applyFilters({ keepPage: true });
     }
+  };
+
+  // done === null hides the bar; "全部" has no known end, so it shows a moving bar instead.
+  const setProgress = (done, total) => {
+    const bar = $('[data-role="progress"]');
+    bar.hidden = done === null;
+    bar.dataset.indeterminate = total >= MAX_FETCH_PAGES ? "1" : "";
+    $('[data-role="progressBar"]').style.width = total ? `${Math.max(4, (done / total) * 100)}%` : "0";
   };
 
   const exportCsv = () => {
@@ -1297,7 +1335,7 @@
             <div class="ldxp-connect-title">对接商品</div>
             <div class="ldxp-connect-subtitle" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
           </div>
-          <button class="ldxp-icon-btn" data-action="connectClose" title="关闭">x</button>
+          <button class="ldxp-icon-btn" data-action="connectClose" title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
         </div>
         <div class="ldxp-connect-body">
           <label>
@@ -1385,7 +1423,7 @@
           </div>
           <div class="ldxp-detail-actions">
             <a class="ldxp-detail-open" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" title="在新标签页打开">新窗口</a>
-            <button class="ldxp-icon-btn" data-action="detailClose" title="关闭">x</button>
+            <button class="ldxp-icon-btn" data-action="detailClose" title="关闭" aria-label="关闭"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
           </div>
         </div>
         <div class="ldxp-detail-hint">部分商品页不允许嵌入显示。如果下方一直空白，请点右上角「新窗口」打开。</div>
@@ -1450,6 +1488,9 @@
       reset();
     } else if (action === "export") {
       exportCsv();
+    } else if (action === "toggleMore") {
+      setMoreFilters($('[data-role="more"]').hidden);
+      saveSettings();
     } else if (action === "first") {
       state.currentPage = 1;
       render();
@@ -1496,21 +1537,55 @@
         render();
         return;
       }
-      applyFilters();
+      // Enter starts a fetch when there is nothing to filter yet.
+      if (!state.raw.length && !state.loading) {
+        startFetch();
+      } else {
+        applyFilters();
+      }
     }
   });
 
-  root.querySelector(".ldxp-controls").addEventListener("change", () => saveSettings());
-  root.querySelector(".ldxp-controls").addEventListener("input", () => saveSettings());
+  // These fields only shape the next fetch; every other field re-filters the fetched goods live.
+  const FETCH_ONLY_FIELDS = new Set(["sourceMode", "agentKey", "goodsType", "pages", "requestIntervalSeconds"]);
+  let liveFilterTimer = 0;
+  const onFieldEdit = (event) => {
+    const name = event.target instanceof HTMLElement ? event.target.dataset.field : "";
+    if (!name || name === "pageJump") {
+      return;
+    }
+    saveSettings();
+    if (FETCH_ONLY_FIELDS.has(name) || !state.raw.length) {
+      return;
+    }
+    clearTimeout(liveFilterTimer);
+    liveFilterTimer = setTimeout(() => applyFilters(), event.type === "input" ? 250 : 0);
+  };
+  bodyEl.addEventListener("input", onFieldEdit);
+  bodyEl.addEventListener("change", onFieldEdit);
+
+  const syncSourceMode = () => {
+    root.dataset.mode = field("sourceMode").value;
+  };
 
   field("sourceMode").addEventListener("change", () => {
     if (field("sourceMode").value === "parent" && !field("agentKey").value.trim()) {
       field("agentKey").value = readPageAgentKey();
     }
+    syncSourceMode();
     setStatus(field("sourceMode").value === "parent"
-      ? "已切换到指定货源商读取"
-      : "已切换到开放货源搜索");
+      ? "已切换到指定货源商，填好对接码后点「开始拉取」"
+      : "已切换到开放货源");
   });
+  syncSourceMode();
+
+  function setMoreFilters(open) {
+    const toggle = $('[data-action="toggleMore"]');
+    $('[data-role="more"]').hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "收起筛选" : "更多筛选";
+    state.layout.showMore = open;
+  }
 
   let dragState = null;
   titlebarEl.addEventListener("mousedown", (event) => {
@@ -1798,6 +1873,9 @@
       state.layout.height = layout.height;
       root.dataset.expandedWidth = `${layout.width}px`;
       root.dataset.expandedPanelHeight = `${layout.height}px`;
+    }
+    if (layout.showMore) {
+      setMoreFilters(true);
     }
     if (Number.isFinite(layout.miniLeft) && Number.isFinite(layout.miniTop) && root.classList.contains("is-minimized")) {
       state.layout.miniLeft = layout.miniLeft;
