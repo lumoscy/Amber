@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>台风实验室 · 全球版</title>
+<meta name="description" content="在地球上任意一片海放下一个热带扰动，看它被引导气流带去哪里、被海温养成多强。覆盖全球七个洋盆的台风、飓风、气旋模拟器。">
+<meta name="theme-color" content="#05070d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2305070d'/%3E%3Cpath d='M16 5c6 0 9 4 9 8-3-3-7-3-9-1-2 2-2 5 0 7 2 2 5 2 7 0-1 5-4 8-7 8-6 0-9-4-9-8 3 3 7 3 9 1 2-2 2-5 0-7-2-2-5-2-7 0 1-5 4-8 7-8z' fill='%235fe3d0'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app" id="app">
+  <div class="stage">
+    <div id="globe" class="globe" aria-label="可旋转的地球，显示环境场、风场和台风路径"></div>
+    <div id="probe" class="probe" hidden></div>
+    <div id="toast" class="toast" hidden></div>
+    <div id="loading" class="loading">正在唤醒大气…</div>
+    <div class="legend" id="legend">
+      <div class="legend-title"><b id="legendName">海表温度</b><span id="legendUnit">°C</span></div>
+      <div class="legend-bar" id="legendBar"></div>
+      <div class="legend-ticks" id="legendTicks"></div>
+    </div>
+    <div class="scale" id="scale" aria-label="强度色标"></div>
+  </div>
+
+  <aside class="panel panel-left" aria-label="环境与控制">
+    <header class="brand">
+      <div class="logo" aria-hidden="true"><i></i></div>
+      <div>
+        <h1>台风实验室</h1>
+        <p>全球版 · 七大洋盆</p>
+      </div>
+    </header>
+    <p class="lede">在任意一片海上点一下，放下一个热带扰动。引导气流决定它去哪，海温和风切变决定它能长多大。</p>
+
+    <section>
+      <h2>去哪片海</h2>
+      <div class="chips" id="basins"></div>
+    </section>
+
+    <section>
+      <div class="row">
+        <h2>月份</h2>
+        <output id="monthOut" class="num">8 月中</output>
+      </div>
+      <input id="month" type="range" min="1" max="12.95" step="0.05" value="8.5" aria-label="月份">
+      <div class="month-ticks" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span></div>
+      <button class="btn ghost" id="yearPlay" type="button">▶ 让四季流转一遍</button>
+    </section>
+
+    <section>
+      <h2>看什么</h2>
+      <div class="seg" id="layers" role="group" aria-label="环境场图层"></div>
+      <p class="hint" id="layerDesc"></p>
+      <label class="check"><input type="checkbox" id="windOn" checked> 显示引导气流（流动的白线）</label>
+    </section>
+
+    <section>
+      <div class="row">
+        <h2>拨动气候</h2>
+        <button class="link" id="knobReset" type="button">复位</button>
+      </div>
+      <div class="knob">
+        <div class="row"><label for="kEnso">ENSO</label><output id="oEnso" class="num">中性</output></div>
+        <input id="kEnso" type="range" min="-2" max="2" step="0.1" value="0">
+        <p class="hint">右拉厄尔尼诺：东太平洋变暖，大西洋切变加大、飓风变少。</p>
+      </div>
+      <div class="knob">
+        <div class="row"><label for="kSst">全球海温</label><output id="oSst" class="num">±0.0 °C</output></div>
+        <input id="kSst" type="range" min="-2" max="3" step="0.1" value="0">
+      </div>
+      <div class="knob">
+        <div class="row"><label for="kHigh">副高强度</label><output id="oHigh" class="num">常年</output></div>
+        <input id="kHigh" type="range" min="-30" max="30" step="2" value="0">
+      </div>
+      <div class="knob">
+        <div class="row"><label for="kWest">副高西伸</label><output id="oWest" class="num">常年</output></div>
+        <input id="kWest" type="range" min="-20" max="20" step="1" value="0">
+        <p class="hint">西伸则台风被挡住一路西行；东退则早早转向北上。</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>一整年，全世界</h2>
+      <p class="hint">按生成潜势在全球随机播种，每个扰动都跑一遍完整的一生。用的是当前的气候旋钮。</p>
+      <button class="btn primary" id="seasonRun" type="button">模拟全球一整年</button>
+      <div id="seasonOut" hidden>
+        <div class="tiles" id="seasonTiles"></div>
+        <table class="table" id="seasonTable"></table>
+        <button class="link" id="seasonClear" type="button">清除这一年</button>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <p>这是一个帮助理解的概念模型，不是预报。气候场是手工搭建的解析近似，不是再分析资料；历史路径来自 IBTrACS。</p>
+    </footer>
+  </aside>
+
+  <aside class="panel panel-right" aria-label="风暴">
+    <section class="storm-card" id="stormCard">
+      <div class="row">
+        <span class="badge" id="badge">等待扰动</span>
+        <span class="agency" id="agency"></span>
+      </div>
+      <div class="big"><b id="vNow" class="num">—</b><span>m/s</span><em id="vAlt" class="num"></em></div>
+      <div class="meter" aria-hidden="true"><i id="meterFill"></i><u id="meterCap" title="此刻环境允许的强度上限"></u></div>
+      <dl class="kv">
+        <div><dt>中心气压</dt><dd id="kP" class="num">—</dd></div>
+        <div><dt>位置</dt><dd id="kPos" class="num">—</dd></div>
+        <div><dt>移动</dt><dd id="kMove" class="num">—</dd></div>
+        <div><dt>脚下海温</dt><dd id="kSstNow" class="num">—</dd></div>
+        <div><dt>风切变</dt><dd id="kShear" class="num">—</dd></div>
+        <div><dt>24 小时趋势</dt><dd id="kTrend" class="num">—</dd></div>
+      </dl>
+      <p class="why" id="why">点「放置扰动」，然后在地球的海面上点一下。也可以先试试下面的经典场景。</p>
+    </section>
+
+    <section>
+      <div class="actions">
+        <button class="btn primary" id="place" type="button">✛ 放置扰动</button>
+        <button class="btn ghost" id="reroll" type="button" title="同一起点，换一种天气再来一次" disabled>🎲 再来一次</button>
+      </div>
+      <label class="check"><input type="checkbox" id="noisy"> 加入天气随机性（每次结果不同）</label>
+      <div class="knob">
+        <div class="row"><label for="size">风暴尺度</label><output id="oSize" class="num">300 km</output></div>
+        <input id="size" type="range" min="150" max="600" step="10" value="300">
+      </div>
+    </section>
+
+    <section>
+      <h2>经典场景</h2>
+      <div class="presets" id="presets"></div>
+    </section>
+
+    <section>
+      <h2>和真实台风比一比 <small>西北太平洋 1980 年以来</small></h2>
+      <input id="histSearch" class="text" list="histList" placeholder="搜名字或年份：山竹、Mangkhut、2018" autocomplete="off" aria-label="搜索历史台风">
+      <datalist id="histList"></datalist>
+      <div class="chips" id="notables"></div>
+      <div id="histInfo" class="hist" hidden></div>
+    </section>
+
+    <section>
+      <h2>这一生</h2>
+      <ol class="events" id="events"><li class="muted">还没有风暴。</li></ol>
+    </section>
+  </aside>
+
+  <div class="dock" id="dock" hidden>
+    <button class="play" id="play" type="button" aria-label="播放">▶</button>
+    <div class="timeline">
+      <canvas id="chart" aria-label="强度随时间变化"></canvas>
+      <input id="time" type="range" min="0" max="240" step="1" value="0" aria-label="时间">
+    </div>
+    <output id="clock" class="num">第 1 天</output>
+    <select id="speed" aria-label="播放速度">
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+      <option value="4">4×</option>
+    </select>
+  </div>
+</div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

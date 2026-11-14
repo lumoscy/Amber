@@ -7,6 +7,10 @@
 - 安装和使用：[edge-ldxp-filter/README.md](edge-ldxp-filter/README.md)
 - 隐私政策：[edge-ldxp-filter/PRIVACY.md](edge-ldxp-filter/PRIVACY.md)
 
+## 台风实验室 · 全球版
+
+[`typhoon-lab/`](typhoon-lab/) 是一个全球热带气旋模拟器：在三维地球上任意一片海放下一个扰动，看它往哪走、长多强；还能模拟全球一整年，或者和西北太平洋的真实台风路径对比。纯静态网页，说明见 [typhoon-lab/README.md](typhoon-lab/README.md)。
+
 ## 存档
 
 之前的两个应用封存在分支 [`archive/v1-diary-and-kindred`](https://github.com/lumoscy/Amber/tree/archive/v1-diary-and-kindred)：
