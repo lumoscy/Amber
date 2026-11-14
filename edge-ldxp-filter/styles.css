@@ -283,6 +283,9 @@
 #ldxp-edge-filter-root .ldxp-filterbar .ldxp-field-range { flex: 0 0 200px; }
 #ldxp-edge-filter-root .ldxp-filterbar .ldxp-field-sort { flex: 0 0 148px; }
 #ldxp-edge-filter-root .ldxp-morebar .ldxp-field { flex: 0 1 160px; }
+#ldxp-edge-filter-root .ldxp-morebar .ldxp-field-range { flex: 0 0 200px; }
+#ldxp-edge-filter-root .ldxp-morebar .ldxp-field-mini { flex: 0 0 92px; }
+#ldxp-edge-filter-root .ldxp-morebar .ldxp-field-wide { flex: 1 1 220px; }
 
 #ldxp-edge-filter-root[data-mode="open"] .ldxp-field-agent {
   display: none;
@@ -481,9 +484,10 @@
 }
 
 #ldxp-edge-filter-root .ldxp-col-image { width: 56px; }
-#ldxp-edge-filter-root .ldxp-col-name { width: 22%; }
-#ldxp-edge-filter-root .ldxp-col-shop { width: 10%; }
-#ldxp-edge-filter-root .ldxp-col-category { width: 10%; }
+#ldxp-edge-filter-root .ldxp-col-score { width: 5.5%; }
+#ldxp-edge-filter-root .ldxp-col-name { width: 21%; }
+#ldxp-edge-filter-root .ldxp-col-shop { width: 8.5%; }
+#ldxp-edge-filter-root .ldxp-col-category { width: 8%; }
 #ldxp-edge-filter-root .ldxp-col-money { width: 7%; }
 #ldxp-edge-filter-root .ldxp-col-number { width: 5.5%; }
 #ldxp-edge-filter-root .ldxp-col-badge { width: 6.5%; }
@@ -554,8 +558,8 @@
   margin-top: 2px;
 }
 
-#ldxp-edge-filter-root td:nth-child(3),
-#ldxp-edge-filter-root td:nth-child(4) {
+#ldxp-edge-filter-root td:nth-child(4),
+#ldxp-edge-filter-root td:nth-child(5) {
   color: var(--ldxp-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -938,3 +942,122 @@
     justify-content: flex-start;
   }
 }
+
+/* ---------- recommendation, favourites and direct links ---------- */
+
+#ldxp-edge-filter-root .ldxp-image-link {
+  text-decoration: none;
+  border-radius: 6px;
+  display: block;
+  width: 36px;
+}
+
+#ldxp-edge-filter-root .ldxp-image-link:hover img {
+  border-color: var(--ldxp-accent);
+}
+
+#ldxp-edge-filter-root a.ldxp-name-link {
+  color: var(--ldxp-ink);
+  cursor: pointer;
+  display: block;
+  text-decoration: none;
+}
+
+#ldxp-edge-filter-root a.ldxp-name-link:hover {
+  color: var(--ldxp-accent);
+  text-decoration: underline;
+}
+
+#ldxp-edge-filter-root a.ldxp-name-link:visited {
+  color: var(--ldxp-muted);
+}
+
+#ldxp-edge-filter-root .ldxp-meta {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#ldxp-edge-filter-root .ldxp-id {
+  margin-left: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#ldxp-edge-filter-root .ldxp-reason {
+  background: var(--ldxp-accent-soft);
+  border-radius: 3px;
+  color: var(--ldxp-accent-hover);
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 5px;
+}
+
+#ldxp-edge-filter-root .ldxp-mark {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  color: #c2c6cc;
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  height: 20px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 20px;
+}
+
+#ldxp-edge-filter-root .ldxp-mark svg {
+  height: 14px;
+  width: 14px;
+}
+
+#ldxp-edge-filter-root .ldxp-mark:hover {
+  background: var(--ldxp-bg);
+  border: 0;
+  color: var(--ldxp-warn);
+}
+
+#ldxp-edge-filter-root .ldxp-mark.is-on {
+  color: var(--ldxp-warn);
+}
+
+#ldxp-edge-filter-root .ldxp-mark.is-on svg path {
+  fill: currentColor;
+}
+
+#ldxp-edge-filter-root .ldxp-mark-hide:hover,
+#ldxp-edge-filter-root .ldxp-mark-hide.is-on {
+  color: var(--ldxp-bad);
+}
+
+#ldxp-edge-filter-root .ldxp-mark-hide.is-on svg path {
+  fill: none;
+}
+
+#ldxp-edge-filter-root tr.is-favorite td {
+  background: #fffaf0;
+}
+
+#ldxp-edge-filter-root .ldxp-score {
+  border-radius: 10px;
+  display: inline-block;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 20px;
+  min-width: 34px;
+  padding: 0 7px;
+  text-align: center;
+}
+
+#ldxp-edge-filter-root .ldxp-score-high { background: var(--ldxp-accent); color: #fff; }
+#ldxp-edge-filter-root .ldxp-score-mid { background: var(--ldxp-accent-soft); color: var(--ldxp-accent-hover); }
+#ldxp-edge-filter-root .ldxp-score-low,
+#ldxp-edge-filter-root .ldxp-score-none { background: var(--ldxp-bg); color: var(--ldxp-faint); }

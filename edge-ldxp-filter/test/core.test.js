@@ -151,3 +151,64 @@ test("goods without a usable image stay empty", () => {
   assert.equal(api.getImage({ description: '<img src="javascript:alert(1)">' }), "");
   assert.equal(api.getImage(null), "");
 });
+
+test("new filters: sale price, sales, stock, profit rate and exclude words", () => {
+  const goods = [
+    { id: 1, name: "ChatGPT 月卡", price: 20, cost_price: 10, sale_num: 500, stock_count: 9 },
+    { id: 2, name: "Netflix 年卡", price: 60, cost_price: 50, sale_num: 30, stock_count: 2 },
+    { id: 3, name: "网盘会员", price: 12, cost_price: 10, sale_num: 800 },
+    { id: 4, name: "测试勿拍", price: 15, cost_price: 5, sale_num: 900, stock_count: 99 }
+  ];
+  assert.deepEqual(ids(api.filterItems(goods, { minPrice: 15, maxPrice: 30 })), [1, 4]);
+  assert.deepEqual(ids(api.filterItems(goods, { minSales: 500 })), [1, 3, 4]);
+  // Unknown stock (usually unlimited) passes a minimum-stock filter.
+  assert.deepEqual(ids(api.filterItems(goods, { minStock: 5 })), [1, 3, 4]);
+  assert.deepEqual(ids(api.filterItems(goods, { minProfitRate: 50 })), [1, 4]);
+  assert.deepEqual(ids(api.filterItems(goods, { excludeKeyword: "测试, netflix" })), [1, 3]);
+});
+
+test("hidden goods are filtered out unless asked for; favourites can be isolated", () => {
+  const goods = [{ id: 1, name: "a" }, { id: 2, name: "b" }, { id: 3, name: "c" }];
+  const context = { favorites: new Set(["2"]), hidden: new Set(["3"]) };
+  assert.deepEqual(ids(api.filterItems(goods, { markMode: "all" }, context)), [1, 2]);
+  assert.deepEqual(ids(api.filterItems(goods, { markMode: "favorite" }, context)), [2]);
+  assert.deepEqual(ids(api.filterItems(goods, { markMode: "hidden" }, context)), [3]);
+});
+
+test("tokenizer: latin words plus Chinese pairs", () => {
+  assert.deepEqual(Array.from(api.tokenize("ChatGPT Plus 会员月卡")).sort(), ["chatgpt", "plus", "会员", "员月", "月卡"].sort());
+});
+
+test("interest is learned from actions and steers the score both ways", () => {
+  const liked = { id: 1, name: "网易云音乐年卡" };
+  const similar = { id: 2, name: "QQ音乐年卡" };
+  const other = { id: 3, name: "Steam 充值" };
+  let profile = api.learnInterest({}, liked, "favorite");
+  assert.ok(api.getInterestScore(similar, profile).score > 0);
+  assert.equal(api.getInterestScore(other, profile).score, 0);
+  profile = api.learnInterest(profile, other, "hide");
+  assert.ok(api.getInterestScore({ id: 4, name: "Steam 钱包" }, profile).score < 0);
+  // Undoing a favourite removes what it taught.
+  assert.equal(JSON.stringify(api.learnInterest(api.learnInterest({}, liked, "favorite"), liked, "unfavorite")), "{}");
+  assert.equal(api.getInterestScore(other, {}, ["steam"]).matched.join(), "steam");
+});
+
+test("recommendation: best sellers lead, interest words win, sold-out sinks", () => {
+  const goods = [
+    { id: 1, name: "冷门商品", price: 11, cost_price: 10, sale_num: 1, stock_count: 50 },
+    { id: 2, name: "爆款会员", price: 15, cost_price: 10, sale_num: 900, stock_count: 50 },
+    { id: 3, name: "爆款但没货", price: 15, cost_price: 10, sale_num: 950, stock_count: 0 },
+    { id: 4, name: "小众年卡", price: 12, cost_price: 10, sale_num: 5, stock_count: 50 }
+  ];
+  let scores = api.scoreItems(goods);
+  assert.deepEqual(ids(api.sortItems(goods, "recommendDesc", scores)), [2, 4, 1, 3]);
+  assert.ok(scores.get(goods[2]).reasons.includes("无库存"));
+  scores = api.scoreItems(goods, { preference: "interest", interestWords: ["年卡"] });
+  assert.equal(ids(api.sortItems(goods, "recommendDesc", scores))[0], 4);
+  assert.deepEqual(ids(api.filterItems(goods, { minScore: 101 }, { scores })), []);
+});
+
+test("percentile rank", () => {
+  assert.equal(api.percentileOf([1, 2, 3, 4], 2), 0.5);
+  assert.equal(api.percentileOf([], 2), 0);
+});
