@@ -6,10 +6,3 @@
 
 - 安装和使用：[edge-ldxp-filter/README.md](edge-ldxp-filter/README.md)
 - 隐私政策：[edge-ldxp-filter/PRIVACY.md](edge-ldxp-filter/PRIVACY.md)
-
-## 存档
-
-之前的两个应用封存在分支 [`archive/v1-diary-and-kindred`](https://github.com/lumoscy/Amber/tree/archive/v1-diary-and-kindred)：
-
-- **Kindred**：可以自定义人格的 AI 角色聊天（`chat/`）
-- **琥珀日记**：每天一句话封存成琥珀，外加时间胶囊（`diary/`）

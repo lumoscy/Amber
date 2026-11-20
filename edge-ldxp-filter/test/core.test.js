@@ -25,6 +25,8 @@ function loadApi() {
 
 const api = loadApi();
 const ids = (items) => items.map((item) => item.id);
+// Objects built inside the vm context have another Object.prototype; compare their data only.
+const plain = (value) => JSON.parse(JSON.stringify(value));
 
 test("prices round up to whole cents without float noise", () => {
   assert.equal(api.roundPrice(1.1), 1.1);
@@ -179,36 +181,43 @@ test("tokenizer: latin words plus Chinese pairs", () => {
   assert.deepEqual(Array.from(api.tokenize("ChatGPT Plus 会员月卡")).sort(), ["chatgpt", "plus", "会员", "员月", "月卡"].sort());
 });
 
-test("interest is learned from actions and steers the score both ways", () => {
-  const liked = { id: 1, name: "网易云音乐年卡" };
-  const similar = { id: 2, name: "QQ音乐年卡" };
-  const other = { id: 3, name: "Steam 充值" };
-  let profile = api.learnInterest({}, liked, "favorite");
-  assert.ok(api.getInterestScore(similar, profile).score > 0);
-  assert.equal(api.getInterestScore(other, profile).score, 0);
-  profile = api.learnInterest(profile, other, "hide");
-  assert.ok(api.getInterestScore({ id: 4, name: "Steam 钱包" }, profile).score < 0);
-  // Undoing a favourite removes what it taught.
-  assert.equal(JSON.stringify(api.learnInterest(api.learnInterest({}, liked, "favorite"), liked, "unfavorite")), "{}");
-  assert.equal(api.getInterestScore(other, {}, ["steam"]).matched.join(), "steam");
-});
-
-test("recommendation: best sellers lead, interest words win, sold-out sinks", () => {
+test("same item: same latin words and similar wording group together; cheapest is rank 1", () => {
   const goods = [
-    { id: 1, name: "冷门商品", price: 11, cost_price: 10, sale_num: 1, stock_count: 50 },
-    { id: 2, name: "爆款会员", price: 15, cost_price: 10, sale_num: 900, stock_count: 50 },
-    { id: 3, name: "爆款但没货", price: 15, cost_price: 10, sale_num: 950, stock_count: 0 },
-    { id: 4, name: "小众年卡", price: 12, cost_price: 10, sale_num: 5, stock_count: 50 }
+    { id: 1, name: "国外真人人头代做Claude KYC，量大价可谈", cost_price: 120 },
+    { id: 2, name: "国外真人人头代做Claude KYC，量大价可谈，美区", cost_price: 165 },
+    { id: 3, name: "claude 普号已过 kyc【美国】gmail 邮箱", cost_price: 165 },
+    { id: 4, name: "claude普通账号 谷歌邮箱gmail 已过kyc认证", cost_price: 149 },
+    { id: 5, name: "【美区IOS】CLAUDE Pro 官方充值（月卡）", cost_price: 145 },
+    { id: 6, name: "Steam 充值", cost_price: 10 }
   ];
-  let scores = api.scoreItems(goods);
-  assert.deepEqual(ids(api.sortItems(goods, "recommendDesc", scores)), [2, 4, 1, 3]);
-  assert.ok(scores.get(goods[2]).reasons.includes("无库存"));
-  scores = api.scoreItems(goods, { preference: "interest", interestWords: ["年卡"] });
-  assert.equal(ids(api.sortItems(goods, "recommendDesc", scores))[0], 4);
-  assert.deepEqual(ids(api.filterItems(goods, { minScore: 101 }, { scores })), []);
+  const groups = api.groupSameItems(goods);
+  assert.equal(groups.get(goods[0]).key, groups.get(goods[1]).key);
+  assert.equal(groups.get(goods[0]).premium, 0);
+  assert.equal(groups.get(goods[1]).premium, 45);
+  assert.equal(groups.get(goods[1]).rank, 2);
+  // Different latin words ("ios", "pro") or unrelated wording never join a group.
+  assert.equal(groups.get(goods[4]), undefined);
+  assert.equal(groups.get(goods[5]), undefined);
+  assert.notEqual(groups.get(goods[0]).key, groups.get(goods[2])?.key);
+
+  assert.deepEqual(ids(api.filterItems(goods.slice(0, 2), { sameMode: "cheapest" }, { groups })), [1]);
+  assert.deepEqual(ids(api.filterItems(goods, { sameGroup: groups.get(goods[0]).key }, { groups })), [1, 2]);
+  assert.deepEqual(ids(api.sortItems(goods.slice(0, 2).reverse(), "sameAsc", groups)), [1, 2]);
 });
 
-test("percentile rank", () => {
-  assert.equal(api.percentileOf([1, 2, 3, 4], 2), 0.5);
-  assert.equal(api.percentileOf([], 2), 0);
+test("product links: API link first, then a pattern learned from the batch, then the shop", () => {
+  const goods = [
+    { id: 1, goods_key: "AbCd1234", link: "https://pay.ldxp.cn/item/AbCd1234" },
+    { id: 2, goods_key: "XyZw5678", link: "" },
+    { id: 3, link: "", user: { link: "https://pay.ldxp.cn/shop/SHOPKEY1" } },
+    { id: 4 }
+  ];
+  const template = api.learnLinkTemplate(goods);
+  assert.equal(template.field, "goods_key");
+  assert.deepEqual(plain(api.resolveProductLink(goods[0], template)), { url: "https://pay.ldxp.cn/item/AbCd1234", kind: "item" });
+  assert.deepEqual(plain(api.resolveProductLink(goods[1], template)), { url: "https://pay.ldxp.cn/item/XyZw5678", kind: "built" });
+  assert.deepEqual(plain(api.resolveProductLink(goods[2], template)), { url: "https://wzyp.cn/shop/SHOPKEY1", kind: "shop" });
+  assert.deepEqual(plain(api.resolveProductLink(goods[3], template)), { url: "", kind: "" });
+  // Without any linked goods in the batch there is nothing to learn from.
+  assert.equal(api.learnLinkTemplate([goods[1]]), null);
 });
