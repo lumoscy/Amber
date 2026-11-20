@@ -43,9 +43,11 @@
     duplicates: 0,
     layout: {},
     filtered: [],
-    scores: new Map(),
-    // Learned locally from what you open, star, connect and hide. Never leaves the browser.
-    interest: { profile: {}, favorites: new Set(), hidden: new Set() },
+    groups: new Map(),
+    // Narrows the list to one same-item group (its key), set by clicking the 同款 cell.
+    sameGroup: "",
+    // Favourites and hidden goods, kept only in this browser.
+    interest: { favorites: new Set(), hidden: new Set() },
     currentPage: 1,
     pageSize: 10,
     loading: false,
@@ -239,7 +241,9 @@
 
   const getConnectedLink = (item) => normalizeProductLink(item.child?.link);
 
-  const getDetailLink = (item) => normalizeProductLink(item?.link);
+  // Pattern learned from the current batch (see learnLinkTemplate); null until goods are fetched.
+  let currentLinkTemplate = null;
+  const getDetailLink = (item) => resolveProductLink(item, currentLinkTemplate).url;
 
   const includesText = (source, query) => {
     if (!query) {
@@ -429,8 +433,8 @@
     profitRate: getProfitRate,
     stock: getStock,
     sales: getSales,
-    // Read from the score map handed to sortItems, not from the item itself.
-    recommend: null
+    // Read from the group map handed to sortItems, not from the item itself.
+    same: null
   };
 
   const parseSort = (value) => {
@@ -442,13 +446,13 @@
   };
 
   // Stable sort; items missing the sorted value always go last.
-  const sortItems = (items, sortValue, scores = null) => {
+  const sortItems = (items, sortValue, groups = null) => {
     const sort = parseSort(sortValue);
     if (!sort) {
       return items;
     }
-    const getValue = sort.field === "recommend"
-      ? (item) => scores?.get(item)?.score ?? null
+    const getValue = sort.field === "same"
+      ? (item) => groups?.get(item)?.premium ?? null
       : SORT_FIELDS[sort.field];
     const sign = sort.dir === "asc" ? 1 : -1;
     return items
@@ -462,7 +466,7 @@
       .map((entry) => entry.item);
   };
 
-  // Words separated by spaces, commas or 、; used by the exclude and interest fields.
+  // Words separated by spaces, commas or 、; used by the exclude field.
   const splitWords = (value) =>
     normalizeSearchText(value)
       .split(/[\s,，、;；|]+/)
@@ -478,14 +482,14 @@
     return (!Number.isFinite(min) || value >= min) && (!Number.isFinite(max) || value <= max);
   };
 
-  // ---------- recommendation ----------
+  // ---------- same-item grouping ----------
 
   // Titles are tokenized without a dictionary: latin/digit runs as words, Chinese as overlapping pairs.
   const tokenize = (value) => {
     const text = normalizeSearchText(value);
     const tokens = new Set();
     (text.match(/[a-z0-9]{2,}/g) || []).forEach((word) => tokens.add(word));
-    (text.match(/[\u4e00-\u9fff]+/g) || []).forEach((run) => {
+    (text.match(/[一-鿿]+/g) || []).forEach((run) => {
       if (run.length === 1) {
         tokens.add(run);
       }
@@ -496,170 +500,154 @@
     return Array.from(tokens);
   };
 
-  const getInterestTokens = (item) => {
-    const tokens = tokenize(`${getProductTitle(item)} ${getCategory(item)}`);
-    const merchant = normalizeSearchText(getMerchant(item));
-    if (merchant) {
-      tokens.push(`@${merchant}`);
-    }
-    return tokens;
-  };
-
-  const INTEREST_WEIGHTS = { view: 1, favorite: 3, unfavorite: -3, connect: 4, hide: -4, unhide: 4 };
-  const MAX_INTEREST_TOKENS = 600;
-
-  // Folds one action into the learned profile ({ token: weight }) and returns the new profile.
-  const learnInterest = (profile, item, action) => {
-    const weight = INTEREST_WEIGHTS[action] || 0;
-    const next = { ...profile };
-    if (!weight) {
-      return next;
-    }
-    getInterestTokens(item).forEach((token) => {
-      const value = Math.max(-12, Math.min(12, (next[token] || 0) + weight));
-      if (value) {
-        next[token] = value;
-      } else {
-        delete next[token];
-      }
-    });
-    const entries = Object.entries(next);
-    if (entries.length <= MAX_INTEREST_TOKENS) {
-      return next;
-    }
-    return Object.fromEntries(
-      entries.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, MAX_INTEREST_TOKENS)
-    );
-  };
-
-  // -1 (things like the ones you hid) .. 1 (things like the ones you opened, starred or connected).
-  const getInterestScore = (item, profile, interestWords = []) => {
-    const tokens = getInterestTokens(item);
-    let learned = 0;
-    tokens.forEach((token) => {
-      learned += profile?.[token] || 0;
-    });
-    // Longer titles share more pairs by chance, so scale by the token count.
-    const scaled = tokens.length ? learned / Math.sqrt(tokens.length) : 0;
-    const learnedScore = Math.tanh(scaled / 4);
-    const text = normalizeSearchText(getItemSearchText(item));
-    const matched = interestWords.filter((word) => text.includes(word));
-    const wordScore = matched.length ? Math.min(1, 0.7 + 0.15 * (matched.length - 1)) : 0;
-    return {
-      score: Math.max(-1, Math.min(1, learnedScore + wordScore)),
-      matched
-    };
-  };
-
-  // Share of values that are <= value, in a list sorted ascending.
-  const percentileOf = (sorted, value) => {
-    if (!sorted.length) {
+  const jaccard = (a, b) => {
+    if (!a.size || !b.size) {
       return 0;
     }
-    let low = 0;
-    let high = sorted.length;
-    while (low < high) {
-      const mid = (low + high) >> 1;
-      if (sorted[mid] <= value) {
-        low = mid + 1;
-      } else {
-        high = mid;
+    let shared = 0;
+    a.forEach((token) => {
+      if (b.has(token)) {
+        shared += 1;
+      }
+    });
+    return shared / (a.size + b.size - shared);
+  };
+
+  const SAME_ITEM_MIN_SIMILARITY = 0.4;
+  // Pairwise comparison inside one bucket; a bucket bigger than this is left ungrouped.
+  const MAX_SAME_ITEM_BUCKET = 1500;
+
+  // Groups goods whose titles name the same product: identical latin words (brand, plan, region,
+  // e.g. "claude pro ios") and enough shared Chinese wording. Conservative on purpose, since a
+  // wrong "same item" is worse than a missed one; the tooltip lists the peers so you can judge.
+  // Returns Map(item -> { key, size, minCost, premium, rank, peers }) for groups of 2 or more.
+  const groupSameItems = (items) => {
+    const buckets = new Map();
+    items.forEach((item) => {
+      const tokens = tokenize(getProductTitle(item));
+      const latin = tokens.filter((token) => /^[a-z0-9]+$/.test(token)).sort();
+      if (!latin.length) {
+        return;
+      }
+      const bucketKey = latin.join(" ");
+      if (!buckets.has(bucketKey)) {
+        buckets.set(bucketKey, []);
+      }
+      buckets.get(bucketKey).push({ item, tokens: new Set(tokens) });
+    });
+
+    const groups = new Map();
+    buckets.forEach((entries, bucketKey) => {
+      if (entries.length < 2 || entries.length > MAX_SAME_ITEM_BUCKET) {
+        return;
+      }
+      const parent = entries.map((_, index) => index);
+      const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+      for (let i = 0; i < entries.length; i += 1) {
+        for (let j = i + 1; j < entries.length; j += 1) {
+          if (jaccard(entries[i].tokens, entries[j].tokens) >= SAME_ITEM_MIN_SIMILARITY) {
+            parent[find(i)] = find(j);
+          }
+        }
+      }
+      const members = new Map();
+      entries.forEach((entry, index) => {
+        const rootIndex = find(index);
+        if (!members.has(rootIndex)) {
+          members.set(rootIndex, []);
+        }
+        members.get(rootIndex).push(entry.item);
+      });
+      members.forEach((list) => {
+        if (list.length < 2) {
+          return;
+        }
+        const costs = list.map(getCostPrice).filter((cost) => cost !== null);
+        const minCost = costs.length ? Math.min(...costs) : null;
+        const peers = list
+          .slice()
+          .sort((a, b) => (getCostPrice(a) ?? Infinity) - (getCostPrice(b) ?? Infinity));
+        // Named after its earliest-fetched member, so the key survives more pages arriving.
+        const key = `${bucketKey}#${asText(getProductId(list[0]))}`;
+        list.forEach((item) => {
+          const cost = getCostPrice(item);
+          groups.set(item, {
+            key,
+            size: list.length,
+            minCost,
+            premium: cost === null || minCost === null ? null : roundPrice(cost - minCost),
+            rank: peers.indexOf(item) + 1,
+            peers
+          });
+        });
+      });
+    });
+    return groups;
+  };
+
+  // ---------- product links ----------
+
+  const DIRECT_LINK_FIELDS = ["link", "url", "goods_link", "goods_url", "share_link", "share_url"];
+  const LINK_KEY_FIELDS = ["goods_key", "key", "token", "goods_token", "code", "id"];
+
+  const getDirectLink = (item) => {
+    for (const name of DIRECT_LINK_FIELDS) {
+      const link = normalizeProductLink(item?.[name]);
+      if (link) {
+        return link;
       }
     }
-    return low / sorted.length;
+    return "";
   };
 
-  const RECOMMEND_PRESETS = {
-    balanced: { sales: 0.35, interest: 0.3, profit: 0.2, price: 0.05, stock: 0.1 },
-    sales: { sales: 0.6, interest: 0.15, profit: 0.1, price: 0.05, stock: 0.1 },
-    profit: { sales: 0.2, interest: 0.15, profit: 0.5, price: 0.05, stock: 0.1 },
-    interest: { sales: 0.15, interest: 0.6, profit: 0.1, price: 0.05, stock: 0.1 },
-    cheap: { sales: 0.25, interest: 0.15, profit: 0.1, price: 0.4, stock: 0.1 }
-  };
-
-  // Scores every fetched item 0-100 against the rest of the batch, with the reasons behind it.
-  const scoreItems = (items, options = {}) => {
-    const weights = RECOMMEND_PRESETS[options.preference] || RECOMMEND_PRESETS.balanced;
-    const profile = options.profile || {};
-    const interestWords = options.interestWords || [];
-    const favorites = options.favorites || new Set();
-    const hasInterest = interestWords.length > 0 || Object.keys(profile).length > 0;
-    const sortedOf = (read) =>
-      items.map(read).filter((value) => value !== null && Number.isFinite(value)).sort((a, b) => a - b);
-    const salesSorted = sortedOf(getSales).filter((value) => value > 0);
-    const rateSorted = sortedOf(getProfitRate);
-    const costSorted = sortedOf(getCostPrice);
-    const scores = new Map();
-
+  // Learns how product URLs are built from the goods that do come with one: if a link contains
+  // that item's goods_key (or another key field), the link with the key cut out is the pattern.
+  // The most common pattern then rebuilds links for goods the API returned without one.
+  const learnLinkTemplate = (items) => {
+    const counts = new Map();
     items.forEach((item) => {
-      const reasons = [];
-      const parts = [];
-      const add = (key, value) => parts.push([weights[key], value]);
-
-      const sales = getSales(item);
-      if (salesSorted.length) {
-        const rank = sales !== null && sales > 0 ? percentileOf(salesSorted, sales) : 0;
-        add("sales", rank);
-        if (rank >= 0.9) {
-          reasons.push(`销量前 ${Math.max(1, Math.round((1 - rank) * 100) || 1)}%`);
-        } else if (rank >= 0.7) {
-          reasons.push("销量靠前");
+      const link = getDirectLink(item);
+      if (!link) {
+        return;
+      }
+      LINK_KEY_FIELDS.forEach((name) => {
+        const value = asText(item?.[name]).trim();
+        if (value.length < 4 || !link.includes(value)) {
+          return;
         }
-      }
-
-      const rate = getProfitRate(item);
-      if (rate !== null && rateSorted.length) {
-        const rank = rate > 0 ? percentileOf(rateSorted, rate) : 0;
-        add("profit", rank);
-        if (rank >= 0.8 && rate > 0) {
-          reasons.push(`利润率 ${percent(rate)}`);
-        }
-      }
-
-      const cost = getCostPrice(item);
-      if (cost !== null && costSorted.length) {
-        const rank = 1 - percentileOf(costSorted, cost) + 1 / costSorted.length;
-        add("price", Math.min(1, rank));
-        if (weights.price >= 0.3 && rank >= 0.8) {
-          reasons.push("价格低");
-        }
-      }
-
-      const stock = getStock(item);
-      add("stock", stock === null ? 1 : stock <= 0 ? 0 : Math.min(1, Math.log10(stock + 1) / 2));
-
-      let interest = { score: 0, matched: [] };
-      if (hasInterest) {
-        interest = getInterestScore(item, profile, interestWords);
-        add("interest", (interest.score + 1) / 2);
-        if (interest.matched.length) {
-          reasons.unshift(`匹配「${interest.matched.slice(0, 2).join("、")}」`);
-        } else if (interest.score >= 0.35) {
-          reasons.unshift("像你看过的");
-        }
-      }
-
-      const totalWeight = parts.reduce((sum, [weight]) => sum + weight, 0);
-      let score = totalWeight
-        ? parts.reduce((sum, [weight, value]) => sum + weight * value, 0) / totalWeight
-        : 0;
-
-      if (favorites.has(asText(getProductId(item)))) {
-        score = Math.min(1, score + 0.15);
-        reasons.unshift("已收藏");
-      }
-      if (stock !== null && stock <= 0) {
-        score *= 0.35;
-        reasons.push("无库存");
-      }
-      if (getStatusKind(item) === "off") {
-        score *= 0.35;
-        reasons.push("未上架");
-      }
-
-      scores.set(item, { score: Math.round(score * 100), reasons, interest: interest.score });
+        const template = link.replace(value, "{key}");
+        const id = `${name}\n${template}`;
+        counts.set(id, (counts.get(id) || 0) + 1);
+      });
     });
-    return scores;
+    let best = null;
+    counts.forEach((count, id) => {
+      if (!best || count > best.count) {
+        const [name, template] = id.split("\n");
+        best = { field: name, template, count };
+      }
+    });
+    return best;
+  };
+
+  const getShopLink = (item) =>
+    normalizeProductLink(item?.user?.link || item?.user?.shop_link || item?.shop_link || item?.shop_url || "");
+
+  // kind: "item" (from the API), "built" (from the learned pattern), "shop" (only the shop page) or "".
+  const resolveProductLink = (item, template = null) => {
+    const direct = getDirectLink(item);
+    if (direct) {
+      return { url: direct, kind: "item" };
+    }
+    const value = template ? asText(item?.[template.field]).trim() : "";
+    if (value) {
+      const built = normalizeProductLink(template.template.replace("{key}", encodeURIComponent(value)));
+      if (built) {
+        return { url: built, kind: "built" };
+      }
+    }
+    const shop = getShopLink(item);
+    return shop ? { url: shop, kind: "shop" } : { url: "", kind: "" };
   };
 
   const filterItems = (items, filters, context = {}) => {
@@ -737,11 +725,15 @@
       data = data.filter((item) => includesText(getMerchantSearchText(item), filters.merchantKeyword));
     }
 
-    if (Number.isFinite(filters.minScore) && context.scores) {
-      data = data.filter((item) => (context.scores.get(item)?.score ?? 0) >= filters.minScore);
+    const groups = context.groups;
+    if (groups && filters.sameGroup) {
+      data = data.filter((item) => groups.get(item)?.key === filters.sameGroup);
+    } else if (groups && filters.sameMode === "cheapest") {
+      // One row per product: the cheapest supplier of each group, plus everything ungrouped.
+      data = data.filter((item) => (groups.get(item)?.rank ?? 1) === 1);
     }
 
-    return sortItems(data, filters.sort, context.scores);
+    return sortItems(data, filters.sort, groups);
   };
 
   const csvCell = (value, isText = true) => {
@@ -838,10 +830,9 @@
       filterItems,
       splitWords,
       tokenize,
-      learnInterest,
-      getInterestScore,
-      percentileOf,
-      scoreItems,
+      groupSameItems,
+      learnLinkTemplate,
+      resolveProductLink,
       toCsv,
       isRetryableError,
       getRetryDelayMs,
@@ -948,8 +939,8 @@
           <label class="ldxp-field ldxp-field-sort">
             <span>排序</span>
             <select data-field="sort">
-              <option value="recommendDesc" selected>智能推荐</option>
-              <option value="default">原站顺序</option>
+              <option value="default" selected>原站顺序</option>
+              <option value="sameAsc">比同款最低贵得少的在前</option>
               <option value="costAsc">成本价从低到高</option>
               <option value="costDesc">成本价从高到低</option>
               <option value="priceAsc">售价从低到高</option>
@@ -964,14 +955,11 @@
               <option value="salesAsc">销量从低到高</option>
             </select>
           </label>
-          <label class="ldxp-field" title="智能推荐更看重什么。推荐分综合销量、利润率、价格、库存和你的兴趣">
-            <span>推荐偏好</span>
-            <select data-field="preference">
-              <option value="balanced">综合</option>
-              <option value="sales">销量优先</option>
-              <option value="interest">兴趣优先</option>
-              <option value="profit">利润优先</option>
-              <option value="cheap">低价优先</option>
+          <label class="ldxp-field" title="同款：标题里的英文词（品牌、套餐、地区）完全一样，中文描述也足够相近的商品。只留最低价，就是每个同款只显示成本最低的那家">
+            <span>同款</span>
+            <select data-field="sameMode">
+              <option value="all">全部显示</option>
+              <option value="cheapest">只留最低价</option>
             </select>
           </label>
           <div class="ldxp-filter-tools">
@@ -1001,10 +989,6 @@
             <span>利润率 ≥ %</span>
             <input data-field="minProfitRate" type="number" step="1" placeholder="不限">
           </label>
-          <label class="ldxp-field ldxp-field-mini" title="只看推荐分不低于这个数的商品（0 到 100）">
-            <span>推荐分 ≥</span>
-            <input data-field="minScore" type="number" min="0" max="100" step="5" placeholder="不限">
-          </label>
           <label class="ldxp-field">
             <span>标记</span>
             <select data-field="markMode">
@@ -1016,10 +1000,6 @@
           <label class="ldxp-field ldxp-field-wide" title="商品名、店铺或分类里出现这些词就不显示。多个词用空格或逗号隔开">
             <span>排除词</span>
             <input data-field="excludeKeyword" type="search" placeholder="不想看到的词，空格隔开">
-          </label>
-          <label class="ldxp-field ldxp-field-wide" title="你想找的东西。命中这些词的商品在智能推荐里会排到前面。多个词用空格或逗号隔开">
-            <span>兴趣词</span>
-            <input data-field="interestKeyword" type="search" placeholder="想找的东西，例如：会员 年卡">
           </label>
           <label class="ldxp-field">
             <span>上架状态</span>
@@ -1042,7 +1022,7 @@
             <input data-field="requestIntervalSeconds" type="number" min="${MIN_REQUEST_INTERVAL_SECONDS}" max="${MAX_REQUEST_INTERVAL_SECONDS}" step="0.1" value="${DEFAULT_REQUEST_INTERVAL_SECONDS}">
           </label>
           <div class="ldxp-filter-tools">
-            <button class="ldxp-text-btn" data-action="clearInterest" title="清空从你的点击、收藏、对接、屏蔽里学到的兴趣，收藏和屏蔽列表也一并清空">清空兴趣记录</button>
+            <button class="ldxp-text-btn" data-action="clearInterest" title="清空收藏和屏蔽列表">清空收藏和屏蔽</button>
           </div>
         </div>
 
@@ -1054,7 +1034,7 @@
             <span class="ldxp-status" data-role="status">选好条件后点「开始拉取」</span>
           </div>
           <div class="ldxp-result-tools">
-            <button class="ldxp-text-btn" data-action="rescore" title="按你刚才的点击、收藏和屏蔽重新计算推荐分">刷新推荐</button>
+            <button class="ldxp-text-btn ldxp-same-chip" data-action="clearSameGroup" data-role="sameChip" title="回到全部商品" hidden>只看同款 ✕</button>
             <button class="ldxp-text-btn" data-action="export" title="把筛选后的全部结果导出为 CSV，可用 Excel 打开">导出 CSV</button>
             <div class="ldxp-pager">
               <button class="ldxp-icon-btn" data-action="prev" title="上一页" aria-label="上一页">
@@ -1080,7 +1060,7 @@
             <thead>
               <tr>
                 <th class="ldxp-col-image"></th>
-                <th class="ldxp-col-score ldxp-sortable" data-sort-field="recommend" title="推荐分 0 到 100：综合销量、利润率、价格、库存和你的兴趣。点击排序">推荐</th>
+                <th class="ldxp-col-score ldxp-sortable" data-sort-field="same" title="和同款里成本最低的那家比，贵多少。点数字只看这一组同款；点表头排序">同款</th>
                 <th class="ldxp-col-name">商品</th>
                 <th class="ldxp-col-shop">店铺</th>
                 <th class="ldxp-col-category">分类</th>
@@ -1140,6 +1120,7 @@
   const fetchButton = $('[data-action="fetch"]');
   const connectModalEl = $('[data-role="connectModal"]');
   const detailModalEl = $('[data-role="detailModal"]');
+  const sameChipEl = $('[data-role="sameChip"]');
 
   const field = (name) => $(`[data-field="${name}"]`);
 
@@ -1162,11 +1143,10 @@
     minSales: asNumber(field("minSales").value, NaN),
     minStock: asNumber(field("minStock").value, NaN),
     minProfitRate: asNumber(field("minProfitRate").value, NaN),
-    minScore: asNumber(field("minScore").value, NaN),
     markMode: field("markMode").value,
     excludeKeyword: field("excludeKeyword").value.trim(),
-    interestKeyword: field("interestKeyword").value.trim(),
-    preference: field("preference").value,
+    sameMode: field("sameMode").value,
+    sameGroup: state.sameGroup,
     stockMode: field("stockMode").value,
     statusMode: field("statusMode").value,
     connected: field("connected").value,
@@ -1246,14 +1226,15 @@
   const applyFilters = ({ keepPage = false } = {}) => {
     const filters = readFilters();
     state.pageSize = filters.pageSize;
-    state.scores = scoreItems(state.raw, {
-      preference: filters.preference,
-      profile: state.interest.profile,
-      interestWords: splitWords(filters.interestKeyword),
-      favorites: state.interest.favorites
-    });
+    state.groups = groupSameItems(state.raw);
+    currentLinkTemplate = learnLinkTemplate(state.raw);
+    if (state.sameGroup && !Array.from(state.groups.values()).some((group) => group.key === state.sameGroup)) {
+      state.sameGroup = "";
+      filters.sameGroup = "";
+    }
+    sameChipEl.hidden = !state.sameGroup;
     state.filtered = filterItems(state.raw, filters, {
-      scores: state.scores,
+      groups: state.groups,
       favorites: state.interest.favorites,
       hidden: state.interest.hidden
     });
@@ -1262,6 +1243,35 @@
       state.currentPage = 1;
     }
     render();
+  };
+
+  const renderSameCell = (item, group) => {
+    if (!group) {
+      return `<span class="ldxp-same ldxp-same-none" title="这批货里没找到同款">-</span>`;
+    }
+    const lines = group.peers.slice(0, 12).map((peer) => {
+      const cost = getCostPrice(peer);
+      const mark = peer === item ? "▶ " : "";
+      return `${mark}${cost === null ? "-" : `¥${money(cost)}`}  ${getMerchant(peer) || "-"}  ${getProductTitle(peer)}`;
+    });
+    if (group.peers.length > 12) {
+      lines.push(`……还有 ${group.peers.length - 12} 家`);
+    }
+    const title = `同款 ${group.size} 家（按成本价从低到高），点击只看这一组：\n${lines.join("\n")}`;
+    const isCheapest = group.premium === 0;
+    const label = group.premium === null ? "?" : isCheapest ? "最低" : `+¥${money(group.premium)}`;
+    return `<button class="ldxp-same ${isCheapest ? "is-cheapest" : "is-pricier"}" data-action="sameGroup" data-group="${escapeHtml(group.key)}" title="${escapeHtml(title)}">${label}<small>${group.size} 家</small></button>`;
+  };
+
+  const renderDetailCell = (id, resolved) => {
+    if (resolved.kind === "item" || resolved.kind === "built") {
+      const hint = resolved.kind === "built" ? "（链接按同批其他商品的规律推算）" : "";
+      return `<a class="ldxp-connect-action" href="${escapeHtml(resolved.url)}" target="_blank" rel="noopener noreferrer" title="新标签页打开商品页${hint}；按住 Shift 点击在弹窗里看" data-action="openDetail" data-id="${escapeHtml(id)}">详情</a>`;
+    }
+    if (resolved.kind === "shop") {
+      return `<a class="ldxp-connect-action" href="${escapeHtml(resolved.url)}" target="_blank" rel="noopener noreferrer" title="接口没给商品链接，先打开所在店铺">店铺</a>`;
+    }
+    return `<button class="ldxp-connect-action ldxp-detail-missing" data-action="copyRaw" data-id="${escapeHtml(id)}" title="接口没给任何链接。点击复制这条商品的原始数据，发给开发者补规则">缺链接</button>`;
   };
 
   const render = () => {
@@ -1308,7 +1318,9 @@
         const connectedKind = getConnectedKind(item);
         const connectActionLabel = getConnectActionLabel(item);
         const connectedLink = getConnectedLink(item);
-        const detailLink = getDetailLink(item);
+        const resolved = resolveProductLink(item, currentLinkTemplate);
+        // Only a real product page goes on the title and image; a shop page goes in the 详情 column.
+        const detailLink = resolved.kind === "item" || resolved.kind === "built" ? resolved.url : "";
         const sales = getSales(item);
         const profit = getProfit(item);
         const profitRate = getProfitRate(item);
@@ -1316,21 +1328,18 @@
         const idText = asText(id);
         const isFavorite = state.interest.favorites.has(idText);
         const isHidden = state.interest.hidden.has(idText);
-        const rec = state.scores.get(item);
-        const recTier = !rec ? "none" : rec.score >= 70 ? "high" : rec.score >= 45 ? "mid" : "low";
-        const recTitle = rec
-          ? `推荐分 ${rec.score}${rec.reasons.length ? `：${rec.reasons.join("，")}` : ""}`
-          : "";
+        const group = state.groups.get(item);
+        const sameHtml = renderSameCell(item, group);
         const imageHtml = image
           ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async">`
           : `<span class="ldxp-no-image">无图</span>`;
-        const openAttrs = `href="${escapeHtml(detailLink)}" target="_blank" rel="noopener noreferrer" data-track="view" data-id="${escapeHtml(id)}"`;
+        const openAttrs = `href="${escapeHtml(detailLink)}" target="_blank" rel="noopener noreferrer" data-id="${escapeHtml(id)}"`;
         return `
           <tr class="${isFavorite ? "is-favorite" : ""}">
             <td class="ldxp-col-image">
               ${detailLink ? `<a class="ldxp-image-link" ${openAttrs} title="在新标签页打开商品详情">${imageHtml}</a>` : imageHtml}
             </td>
-            <td><span class="ldxp-score ldxp-score-${recTier}" title="${escapeHtml(recTitle)}">${rec ? rec.score : "-"}</span></td>
+            <td>${sameHtml}</td>
             <td>
               ${
                 detailLink
@@ -1340,10 +1349,9 @@
               <div class="ldxp-meta">
                 ${
                   id
-                    ? `<button class="ldxp-mark ${isFavorite ? "is-on" : ""}" data-action="favorite" data-id="${escapeHtml(id)}" title="${isFavorite ? "取消收藏" : "收藏：推荐会多给你找这类商品"}" aria-label="收藏" aria-pressed="${isFavorite}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg></button><button class="ldxp-mark ldxp-mark-hide ${isHidden ? "is-on" : ""}" data-action="hide" data-id="${escapeHtml(id)}" title="${isHidden ? "取消屏蔽" : "不感兴趣：隐藏它，并少推荐这类商品"}" aria-label="不感兴趣" aria-pressed="${isHidden}"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M4.2 11.8l7.6-7.6"/></svg></button>`
+                    ? `<button class="ldxp-mark ${isFavorite ? "is-on" : ""}" data-action="favorite" data-id="${escapeHtml(id)}" title="${isFavorite ? "取消收藏" : "收藏（「更多筛选 → 标记」可只看收藏）"}" aria-label="收藏" aria-pressed="${isFavorite}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg></button><button class="ldxp-mark ldxp-mark-hide ${isHidden ? "is-on" : ""}" data-action="hide" data-id="${escapeHtml(id)}" title="${isHidden ? "取消屏蔽" : "不感兴趣：隐藏它"}" aria-label="不感兴趣" aria-pressed="${isHidden}"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M4.2 11.8l7.6-7.6"/></svg></button>`
                     : ""
                 }
-                ${(rec ? rec.reasons.slice(0, 3) : []).map((reason) => `<span class="ldxp-reason">${escapeHtml(reason)}</span>`).join("")}
                 ${id ? `<span class="ldxp-id">ID ${escapeHtml(id)}</span>` : ""}
               </div>
             </td>
@@ -1366,11 +1374,7 @@
               }
             </td>
             <td>
-              ${
-                detailLink
-                  ? `<button class="ldxp-connect-action" data-action="viewDetail" data-id="${escapeHtml(id)}" title="弹窗查看商品详情">详情</button>`
-                  : `<span class="ldxp-badge">-</span>`
-              }
+              ${renderDetailCell(id, resolved)}
             </td>
           </tr>
         `;
@@ -1423,6 +1427,7 @@
     state.seenIds = new Set();
     state.duplicates = 0;
     state.filtered = [];
+    state.sameGroup = "";
     state.currentPage = 1;
     state.lastSummary = "";
     fetchButton.textContent = "停止拉取";
@@ -1507,12 +1512,14 @@
     });
   };
 
-  // Header clicks cycle: descending -> ascending -> default order.
+  // Header clicks cycle: descending -> ascending -> default order. 同款 starts ascending,
+  // since "closest to the cheapest supplier first" is the useful end.
   const toggleHeaderSort = (sortField) => {
     const sort = parseSort(field("sort").value);
-    let next = `${sortField}Desc`;
+    const [first, second] = sortField === "same" ? ["Asc", "Desc"] : ["Desc", "Asc"];
+    let next = `${sortField}${first}`;
     if (sort && sort.field === sortField) {
-      next = sort.dir === "desc" ? `${sortField}Asc` : "default";
+      next = sort.dir === first.toLowerCase() ? `${sortField}${second}` : "default";
     }
     field("sort").value = next;
     applyFilters();
@@ -1528,23 +1535,25 @@
     field("requestIntervalSeconds").value = String(DEFAULT_REQUEST_INTERVAL_SECONDS);
     field("minCost").value = "";
     field("maxCost").value = "";
-    ["minPrice", "maxPrice", "minSales", "minStock", "minProfitRate", "minScore", "excludeKeyword", "interestKeyword"].forEach((name) => {
+    ["minPrice", "maxPrice", "minSales", "minStock", "minProfitRate", "excludeKeyword"].forEach((name) => {
       field(name).value = "";
     });
     field("markMode").value = "all";
-    field("preference").value = "balanced";
+    field("sameMode").value = "all";
     field("stockMode").value = "all";
     field("statusMode").value = "all";
     field("connected").value = "all";
     field("categoryKeyword").value = "";
     field("merchantKeyword").value = "";
-    field("sort").value = "recommendDesc";
+    field("sort").value = "default";
     field("pageSize").value = "10";
     state.raw = [];
     state.seenIds = new Set();
     state.duplicates = 0;
     state.filtered = [];
-    state.scores = new Map();
+    state.groups = new Map();
+    state.sameGroup = "";
+    currentLinkTemplate = null;
     state.currentPage = 1;
     state.lastSummary = "暂无数据";
     setStatus("已重置");
@@ -1552,7 +1561,7 @@
     saveSettings();
   };
 
-  // ---------- interest: favourites, hidden goods and the learned profile ----------
+  // ---------- favourites and hidden goods ----------
 
   let interestLoaded = false;
   let interestSaveTimer = 0;
@@ -1566,7 +1575,6 @@
       try {
         chrome.storage.local.set({
           [INTEREST_STORAGE_KEY]: {
-            profile: state.interest.profile,
             favorites: Array.from(state.interest.favorites).slice(-MAX_MARKED_IDS),
             hidden: Array.from(state.interest.hidden).slice(-MAX_MARKED_IDS)
           }
@@ -1585,28 +1593,11 @@
       saved = null;
     }
     if (saved && typeof saved === "object") {
-      const profile = {};
-      Object.entries(saved.profile || {}).forEach(([token, weight]) => {
-        if (Number.isFinite(weight)) {
-          profile[token] = weight;
-        }
-      });
-      state.interest.profile = profile;
       state.interest.favorites = new Set((Array.isArray(saved.favorites) ? saved.favorites : []).map(asText));
       state.interest.hidden = new Set((Array.isArray(saved.hidden) ? saved.hidden : []).map(asText));
     }
     interestLoaded = true;
   };
-
-  // The profile updates right away; rows are only re-ranked on the next filter change or
-  // 「刷新推荐」, so the list doesn't jump around under the cursor.
-  function recordInterest(item, action) {
-    if (!item) {
-      return;
-    }
-    state.interest.profile = learnInterest(state.interest.profile, item, action);
-    saveInterest();
-  }
 
   const toggleFavorite = (item) => {
     const id = asText(getProductId(item));
@@ -1619,8 +1610,8 @@
     } else {
       state.interest.favorites.delete(id);
     }
-    recordInterest(item, on ? "favorite" : "unfavorite");
-    setStatus(on ? "已收藏，推荐会多找这类商品（「更多筛选 → 标记」可只看收藏）" : "已取消收藏", "ok");
+    saveInterest();
+    setStatus(on ? "已收藏（「更多筛选 → 标记」可只看收藏）" : "已取消收藏", "ok");
     if (!on && field("markMode").value === "favorite") {
       applyFilters({ keepPage: true });
       return;
@@ -1641,16 +1632,16 @@
     } else {
       state.interest.hidden.delete(id);
     }
-    recordInterest(item, on ? "hide" : "unhide");
-    setStatus(on ? "已屏蔽，并会少推荐这类商品（「更多筛选 → 标记」可找回）" : "已取消屏蔽", "ok");
+    saveInterest();
+    setStatus(on ? "已屏蔽（「更多筛选 → 标记」可找回）" : "已取消屏蔽", "ok");
     applyFilters({ keepPage: true });
   };
 
   const clearInterest = () => {
-    state.interest = { profile: {}, favorites: new Set(), hidden: new Set() };
+    state.interest = { favorites: new Set(), hidden: new Set() };
     saveInterest();
     applyFilters();
-    setStatus("已清空兴趣记录、收藏和屏蔽列表", "ok");
+    setStatus("已清空收藏和屏蔽列表", "ok");
   };
 
   const getDefaultConnectForm = (item) => {
@@ -1789,7 +1780,6 @@
         state.connect.item.child = state.connect.item.child || { link: "" };
       }
 
-      recordInterest(state.connect.item, "connect");
       setStatus("对接成功，建议重新拉取刷新状态", "ok");
       closeConnectModal();
       render();
@@ -1885,6 +1875,21 @@
     `;
   }
 
+  // For goods the API returned without any link: hand the raw record over so a rule can be added.
+  const copyRawItem = async (item) => {
+    if (!item) {
+      return;
+    }
+    const text = JSON.stringify(item, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("已复制这条商品的原始数据，发给开发者就能补上链接规则", "ok");
+    } catch (_) {
+      console.info("[货源筛选] 缺链接商品的原始数据：", item);
+      setStatus("复制失败，原始数据已打印到控制台（F12 → Console）", "warn");
+    }
+  };
+
   const openDetailModal = (item) => {
     if (!item) {
       setStatus("没有找到要查看的商品", "error");
@@ -1895,7 +1900,6 @@
       setStatus("该商品没有可打开的详情链接", "error");
       return;
     }
-    recordInterest(item, "view");
     state.detail.visible = true;
     state.detail.item = item;
     renderDetailModal();
@@ -1978,13 +1982,6 @@
       return;
     }
 
-    // Opening a product page is the browser's job (the row link); we only note the interest.
-    const trackTarget = event.target instanceof Element ? event.target.closest('[data-track="view"]') : null;
-    if (trackTarget instanceof HTMLElement) {
-      recordInterest(findItemById(trackTarget.dataset.id), "view");
-      return;
-    }
-
     const actionTarget = event.target instanceof Element ? event.target.closest("[data-action]") : null;
     const action = actionTarget instanceof HTMLElement ? actionTarget.dataset.action : "";
     if (!action) {
@@ -2044,19 +2041,23 @@
       toggleFavorite(findItemById(actionTarget.dataset.id));
     } else if (action === "hide") {
       toggleHidden(findItemById(actionTarget.dataset.id));
-    } else if (action === "rescore") {
-      applyFilters({ keepPage: true });
-      setStatus("已按最新兴趣重新计算推荐", "ok");
+    } else if (action === "openDetail") {
+      // A plain click follows the link to the product page; Shift+click shows it in the modal.
+      if (event.shiftKey) {
+        event.preventDefault();
+        openDetailModal(findItemById(actionTarget.dataset.id));
+      }
+    } else if (action === "copyRaw") {
+      copyRawItem(findItemById(actionTarget.dataset.id));
+    } else if (action === "sameGroup") {
+      state.sameGroup = actionTarget.dataset.group || "";
+      applyFilters();
+      setStatus("只看这一组同款，按成本价从低到高", "ok");
+    } else if (action === "clearSameGroup") {
+      state.sameGroup = "";
+      applyFilters();
     } else if (action === "clearInterest") {
       clearInterest();
-    }
-  });
-
-  // Middle-click also opens the product page in a background tab.
-  root.addEventListener("auxclick", (event) => {
-    const trackTarget = event.target instanceof Element ? event.target.closest('[data-track="view"]') : null;
-    if (event.button === 1 && trackTarget instanceof HTMLElement) {
-      recordInterest(findItemById(trackTarget.dataset.id), "view");
     }
   });
 
@@ -2443,8 +2444,8 @@
   const SAVED_FIELDS = [
     "agentKey", "keyword", "goodsType", "pages", "requestIntervalSeconds", "minCost", "maxCost",
     "stockMode", "statusMode", "connected", "categoryKeyword", "merchantKeyword", "sort", "pageSize",
-    "minPrice", "maxPrice", "minSales", "minStock", "minProfitRate", "minScore", "markMode",
-    "excludeKeyword", "interestKeyword", "preference"
+    "minPrice", "maxPrice", "minSales", "minStock", "minProfitRate", "markMode",
+    "excludeKeyword", "sameMode"
   ];
   let settingsLoaded = false;
   let saveTimer = 0;

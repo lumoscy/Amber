@@ -22,7 +22,7 @@
 
 ## 本地存储
 
-扩展把面板的筛选条件（包括填写的货源对接码）、面板大小和小胶囊位置保存在 `chrome.storage.local`，方便下次恢复。为了做推荐，扩展还会在同一处保存用户收藏和屏蔽的商品 ID，以及从用户点开、收藏、对接、屏蔽的商品标题里拆出的词和权重；在面板里点「清空兴趣记录」可以全部删除。这些数据只留在用户的浏览器里，不会发送到任何地方。
+扩展把面板的筛选条件（包括填写的货源对接码）、面板大小和小胶囊位置保存在 `chrome.storage.local`，方便下次恢复。扩展还会在同一处保存用户收藏和屏蔽的商品 ID；在面板里点「清空收藏和屏蔽」可以全部删除。这些数据只留在用户的浏览器里，不会发送到任何地方。
 
 ## 不做的事
 
@@ -42,7 +42,7 @@ This extension filters and compares source goods on supported LDXP pages. It doe
 
 **Data processed.** After the user opens the panel and starts fetching, the extension processes, inside the browser: product and store information returned by LDXP source goods APIs; page content needed to show filtering and detail views; and the authentication token (`auth-token`) the LDXP website stores locally. The token is used only as `Merchant-Token` in requests from the user's browser to the original LDXP domains, so the user can see data their logged-in account can already access. Shop links may be rewritten from the legacy `pay.ldxp.cn` domain to `wzyp.cn`.
 
-**Local storage.** Filter settings (including any source agent key entered), panel size and launcher position are saved in `chrome.storage.local` so they are restored next time. For recommendations, the extension also stores there the IDs of goods the user starred or hid, and weighted words taken from the titles of goods the user opened, starred, connected or hid; the "清空兴趣记录" button in the panel deletes all of it. This data stays in the user's browser and is never sent anywhere.
+**Local storage.** Filter settings (including any source agent key entered), panel size and launcher position are saved in `chrome.storage.local` so they are restored next time. The extension also stores there the IDs of goods the user starred or hid; the "清空收藏和屏蔽" button in the panel deletes them. This data stays in the user's browser and is never sent anywhere.
 
 **No remote code.** The extension does not load or execute remote JavaScript or WebAssembly. All code is packaged with the extension.
 
